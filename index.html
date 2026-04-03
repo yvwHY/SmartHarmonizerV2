@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Vocal Harmonizer</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+  <script src="https://unpkg.com/ml5@0.12.2/dist/ml5.min.js"></script>
+
+</head>
+
+<body>
+
+  <div id="ui-container">
+    <h2>Smart Harmonizer</h2>
+    <div class="status">Pitch Model Status: <span id="model-status" style="color:yellow">Loading...</span></div>
+    <div class="status">Hand Detected: <span id="hand-status" class="highlight">Waiting...</span></div>
+    <hr style="border: 0.5px solid #555;">
+    <div class="status">Current Pitch: <span id="note-display" class="highlight">--</span></div>
+    <div class="status">Harmony Mode: <span id="harmony-mode" class="highlight" style="color:#aaa">Muted</span></div>
+  </div>
+
+  <div id="overlay">
+    <h1 style="color: white; margin-bottom: 20px;">Ready to Start?</h1>
+    <p style="color: #aaa; margin-bottom: 30px;">Please allow camera and microphone access</p>
+    <button id="start-btn" onclick="startApp()" disabled>Loading Models...</button>
+  </div>
+
+  <script src="sketch.js"></script>
+
+</body>
+
+</html>
