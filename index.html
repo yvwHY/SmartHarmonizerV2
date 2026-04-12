@@ -6,109 +6,178 @@
     <link rel="icon" href="data:,">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
-    <script src="https://unpkg.com/ml5@0.12.2/dist/ml5.min.js"></script>
     <style>
-      * { box-sizing: border-box; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
       body {
-        margin: 0;
-        background: #000;
-        color: white;
+        background: #08080f;
+        color: #fff;
         font-family: 'Courier New', monospace;
         overflow: hidden;
       }
 
+      /* ── Status panel (top-left) ── */
       #ui-container {
         position: absolute;
         top: 20px;
         left: 20px;
-        background: rgba(0, 0, 0, 0.75);
-        padding: 20px 24px;
+        background: rgba(0,0,0,0.55);
+        padding: 14px 18px;
         border-radius: 4px;
         z-index: 100;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        min-width: 220px;
-        backdrop-filter: blur(6px);
+        border: 1px solid rgba(255,255,255,0.07);
+        min-width: 180px;
+        backdrop-filter: blur(8px);
       }
-
       #ui-container h2 {
-        margin: 0 0 14px;
-        font-size: 1rem;
-        letter-spacing: 0.2em;
+        font-size: 0.68rem;
+        letter-spacing: 0.22em;
         text-transform: uppercase;
-        color: #fff;
+        color: rgba(255,255,255,0.3);
         font-weight: 400;
+        margin-bottom: 10px;
       }
-
       .ui-row {
         display: flex;
         justify-content: space-between;
-        align-items: center;
-        margin-bottom: 6px;
-        font-size: 0.75rem;
-        color: rgba(255,255,255,0.5);
-        letter-spacing: 0.05em;
+        gap: 16px;
+        margin-bottom: 4px;
+        font-size: 0.68rem;
+        color: rgba(255,255,255,0.3);
+        letter-spacing: 0.04em;
       }
-
-      .ui-row span.val {
-        color: #00ffcc;
-        font-weight: 600;
-      }
-
-      .ui-row span.val.warn { color: #ffcc00; }
-      .ui-row span.val.muted { color: rgba(255,255,255,0.25); }
+      .val { color: #00ffcc; }
 
       hr.divider {
         border: none;
-        border-top: 1px solid rgba(255,255,255,0.08);
-        margin: 12px 0;
+        border-top: 1px solid rgba(255,255,255,0.06);
+        margin: 8px 0;
       }
 
-      /* Overlay */
+      /* ── Mute controls (bottom bar) ── */
+      #mute-bar {
+        position: absolute;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 20px;
+        z-index: 100;
+        align-items: center;
+      }
+
+      .mute-group {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .mute-label {
+        font-size: 0.62rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: rgba(255,255,255,0.3);
+      }
+
+      .mute-btn {
+        padding: 5px 14px;
+        font-family: 'Courier New', monospace;
+        font-size: 0.65rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        background: transparent;
+        color: rgba(255,255,255,0.7);
+        border: 1px solid rgba(255,255,255,0.25);
+        border-radius: 2px;
+        cursor: pointer;
+        transition: color 0.15s, border-color 0.15s, background 0.15s, opacity 0.15s;
+        opacity: 0.55;
+        min-width: 64px;
+      }
+
+      .mute-btn:hover {
+        opacity: 1;
+        border-color: rgba(255,255,255,0.5);
+      }
+
+      /* ── Overlay ── */
       #overlay {
         position: fixed;
         inset: 0;
-        background: #000;
+        background: #08080f;
         display: flex;
         justify-content: center;
         align-items: center;
         z-index: 10000;
-        flex-direction: column;
-        gap: 0;
       }
 
       .overlay-inner {
         text-align: center;
         padding: 40px;
+        max-width: 460px;
       }
 
       .overlay-inner h1 {
-        font-family: 'Courier New', monospace;
-        font-size: clamp(2rem, 5vw, 3.5rem);
+        font-size: clamp(1.8rem, 4vw, 2.8rem);
         font-weight: 400;
-        letter-spacing: 0.3em;
+        letter-spacing: 0.25em;
         text-transform: uppercase;
-        margin: 0 0 8px;
-        color: #fff;
+        margin-bottom: 6px;
       }
 
       .overlay-inner .sub {
-        font-size: 0.8rem;
-        letter-spacing: 0.2em;
-        color: rgba(255,255,255,0.35);
-        margin-bottom: 48px;
+        font-size: 0.72rem;
+        letter-spacing: 0.16em;
+        color: rgba(255,255,255,0.28);
         text-transform: uppercase;
+        margin-bottom: 34px;
+      }
+
+      .instructions {
+        margin-bottom: 34px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        text-align: left;
+      }
+
+      .instruction-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+      }
+
+      .instruction-num {
+        width: 22px;
+        height: 22px;
+        border: 1px solid rgba(0,255,204,0.35);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.62rem;
+        color: #00ffcc;
+        flex-shrink: 0;
+        margin-top: 1px;
+      }
+
+      .instruction-text {
+        font-size: 0.74rem;
+        color: rgba(255,255,255,0.45);
+        letter-spacing: 0.03em;
+        line-height: 1.5;
       }
 
       .start-btn {
-        display: inline-block;
-        padding: 14px 48px;
+        padding: 12px 44px;
         font-family: 'Courier New', monospace;
-        font-size: 0.85rem;
-        letter-spacing: 0.25em;
+        font-size: 0.78rem;
+        letter-spacing: 0.22em;
         text-transform: uppercase;
         background: transparent;
         color: #00ffcc;
-        border: 1px solid #00ffcc;
+        border: 1px solid rgba(0,255,204,0.45);
         border-radius: 2px;
         cursor: pointer;
         transition: background 0.2s, color 0.2s;
@@ -116,24 +185,18 @@
 
       .start-btn:hover {
         background: #00ffcc;
-        color: #000;
-      }
-
-      .hint {
-        margin-top: 24px;
-        font-size: 0.7rem;
-        color: rgba(255,255,255,0.2);
-        letter-spacing: 0.1em;
+        color: #08080f;
       }
     </style>
   </head>
   <body>
 
+    <!-- Status panel -->
     <div id="ui-container">
       <h2>Digital Choir V3</h2>
       <div class="ui-row">
-        <span>Pitch Model</span>
-        <span id="model-status" class="val warn">Initialising</span>
+        <span>Status</span>
+        <span id="model-status" class="val" style="color:#ffcc00">Standby</span>
       </div>
       <div class="ui-row">
         <span>Note</span>
@@ -141,21 +204,57 @@
       </div>
       <hr class="divider">
       <div class="ui-row">
-        <span>Hand Tracking</span>
-        <span id="hand-status" class="val muted">Waiting</span>
-      </div>
-      <div class="ui-row">
-        <span>Harmony</span>
-        <span id="harmony-mode" class="val muted">Muted</span>
+        <span>Mode</span>
+        <span id="harmony-mode" class="val">--</span>
       </div>
     </div>
 
+    <!-- Mute bar — one button per voice -->
+    <div id="mute-bar">
+      <div class="mute-group">
+        <span class="mute-label" style="color:rgba(255,220,200,0.6)">Soprano</span>
+        <button id="mute-btn-0" class="mute-btn" onclick="toggleMute(0)">Mute</button>
+      </div>
+      <div class="mute-group">
+        <span class="mute-label" style="color:rgba(200,240,255,0.6)">Alto</span>
+        <button id="mute-btn-1" class="mute-btn" onclick="toggleMute(1)">Mute</button>
+      </div>
+      <div class="mute-group">
+        <span class="mute-label" style="color:rgba(180,255,210,0.6)">Tenor</span>
+        <button id="mute-btn-2" class="mute-btn" onclick="toggleMute(2)">Mute</button>
+      </div>
+      <div class="mute-group">
+        <span class="mute-label" style="color:rgba(220,190,255,0.6)">Bass</span>
+        <button id="mute-btn-3" class="mute-btn" onclick="toggleMute(3)">Mute</button>
+      </div>
+    </div>
+
+    <!-- Start overlay -->
     <div id="overlay">
       <div class="overlay-inner">
-        <h1>Vocal Harmonizer</h1>
-        <p class="sub">Digital Choir &mdash; Gesture-controlled 1·3·5 harmony</p>
-        <button class="start-btn" onclick="startExperience()">Start</button>
-        <p class="hint">Allow microphone &amp; camera access when prompted</p>
+        <h1>Digital Choir</h1>
+        <p class="sub">Realtime SATB choir simulator</p>
+
+        <div class="instructions">
+          <div class="instruction-row">
+            <div class="instruction-num">1</div>
+            <div class="instruction-text">Allow microphone access when prompted</div>
+          </div>
+          <div class="instruction-row">
+            <div class="instruction-num">2</div>
+            <div class="instruction-text">Sing any note — you are the Soprano</div>
+          </div>
+          <div class="instruction-row">
+            <div class="instruction-num">3</div>
+            <div class="instruction-text">Alto, Tenor and Bass join automatically in the detected key</div>
+          </div>
+          <div class="instruction-row">
+            <div class="instruction-num">4</div>
+            <div class="instruction-text">Click a blob or use the mute buttons to solo any voice</div>
+          </div>
+        </div>
+
+        <button class="start-btn" onclick="startExperience()">Start singing</button>
       </div>
     </div>
 
@@ -163,9 +262,7 @@
     <script>
       async function startExperience() {
         document.getElementById('overlay').style.display = 'none';
-        if (typeof startApp === "function") {
-          await startApp();
-        }
+        if (typeof startApp === 'function') await startApp();
       }
     </script>
   </body>

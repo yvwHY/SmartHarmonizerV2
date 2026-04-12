@@ -1,118 +1,193 @@
 /**
  * Name: Yu Ting Liao
- * Project: Digital Choir V3 - Goldsmiths Final Fix
- * Version: Compatible with ml5.js v0.12.2 + Chrome 130+
+ * Project: Digital Choir V3 — Realtime Choir Simulator
+ * Version: Blob Opera style, Chrome 130+ safe
  *
- * Fix log:
- * - Replaced ml5.pitchDetection with AnalyserNode + YIN algorithm
- *   because createScriptProcessor is removed in Chrome 130+ and ml5's
- *   pitch model internally depends on it.
- * - Fixed mirrored hand keypoint coordinates (drawKeypoints + updateHarmony).
- * - Fixed thumb direction check for mirrored video.
- * - Moved hand logic outside the push/pop mirror block.
- * - Fixed note index modulo to handle negative values.
+ * Architecture:
+ *   User sings → detected as Soprano (highest voice)
+ *   Three pitch shifters generate Alto, Tenor, Bass automatically
+ *   Each voice snaps to the nearest chord tone within its own MIDI range
+ *   Key is estimated in real time from singing history
+ *   No hand detection — choir always active when singing
+ *   Each voice has an individual mute toggle (click the blob or the button)
  */
 
-let video, handpose, predictions = [];
-let mic, pitchShift3rd, pitchShift5th;
-let analyser, pitchBuffer;
-let isStarted = false, currentFreq = 0, harmonyState = 0;
+// ---------------------------------------------------------------------------
+// Voice definitions — MIDI ranges for each choir part
+// ---------------------------------------------------------------------------
+const VOICES = [
+  { name: "Soprano", range: [57, 84], color: [255, 220, 200] },
+  { name: "Alto",    range: [48, 72], color: [200, 240, 255] },
+  { name: "Tenor",   range: [42, 66], color: [180, 255, 210] },
+  { name: "Bass",    range: [28, 57], color: [220, 190, 255] },
+];
 
-const scaleArr = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+// Mute state — true = muted. Soprano starts unmuted (it's the user's own voice).
+const voiceMuted = [false, false, false, false];
+
+// ---------------------------------------------------------------------------
+// Smart harmony — key estimation + chord tone snapping
+// ---------------------------------------------------------------------------
+const MAJOR_SCALE = [0, 2, 4, 5, 7, 9, 11];
+const MINOR_SCALE = [0, 2, 3, 5, 7, 8, 10];
+const CHORD_TONES = [0, 4, 7];
+
+const pitchHist = new Array(12).fill(0);
+
+function updateKeyHistory(freqHz) {
+  const midi = Math.round(12 * Math.log2(freqHz / 440) + 69);
+  const pc   = ((midi % 12) + 12) % 12;
+  pitchHist[pc] += 1;
+  for (let i = 0; i < 12; i++) pitchHist[i] *= 0.995;
+}
+
+function estimateKey() {
+  let bestScore = -1, bestRoot = 0, bestScale = MAJOR_SCALE;
+  for (let root = 0; root < 12; root++) {
+    for (const scale of [MAJOR_SCALE, MINOR_SCALE]) {
+      let score = 0;
+      for (const interval of scale) score += pitchHist[(root + interval) % 12];
+      if (score > bestScore) { bestScore = score; bestRoot = root; bestScale = scale; }
+    }
+  }
+  return { root: bestRoot, scale: bestScale };
+}
+
+function snapToChordToneInRange(targetMidi, key, minMidi, maxMidi) {
+  const candidates = [];
+  for (let oct = -3; oct <= 3; oct++) {
+    for (const interval of CHORD_TONES) {
+      const m = key.root + interval + oct * 12 + 60;
+      if (m >= minMidi && m <= maxMidi) candidates.push(m);
+    }
+  }
+  if (candidates.length === 0) return targetMidi;
+  return candidates.reduce((best, m) =>
+    Math.abs(m - targetMidi) < Math.abs(best - targetMidi) ? m : best
+  );
+}
+
+function midiToHz(midi)       { return 440 * Math.pow(2, (midi - 69) / 12); }
+function midiToShift(hz, mid) { return 12 * Math.log2(midiToHz(mid) / hz); }
+
+// ---------------------------------------------------------------------------
+// p5 + audio state
+// ---------------------------------------------------------------------------
+let video;
+let mic, sopranoDry, analyser, pitchBuffer;
+let pitchShifters = []; // index 0=Alto, 1=Tenor, 2=Bass
+let isStarted = false;
+let currentFreq = 0;
+
+let voiceAmps    = [0, 0, 0, 0];
+let voicePitches = [0, 0, 0, 0];
+let mouthPhase   = [0, 0, 0, 0];
+
+const scaleArr = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+
+// ---------------------------------------------------------------------------
+// Toggle mute for a voice index (called from HTML buttons and mousePressed)
+// ---------------------------------------------------------------------------
+function toggleMute(index) {
+  voiceMuted[index] = !voiceMuted[index];
+
+  if (index === 0) {
+    // Soprano = dry mic signal through a Gain node
+    if (sopranoDry) sopranoDry.gain.rampTo(voiceMuted[0] ? 0 : 1, 0.05);
+  } else {
+    // Alto/Tenor/Bass = pitch shifters [index-1]
+    const ps = pitchShifters[index - 1];
+    if (ps) ps.wet.rampTo(voiceMuted[index] ? 0 : 0.85, 0.05);
+  }
+
+  // Sync the mute button visuals in index.html
+  syncMuteButtons();
+}
+
+function syncMuteButtons() {
+  for (let i = 0; i < 4; i++) {
+    const btn = document.getElementById('mute-btn-' + i);
+    if (!btn) continue;
+    const muted = voiceMuted[i];
+    btn.textContent  = muted ? 'Unmute' : 'Mute';
+    btn.style.opacity       = muted ? '1' : '0.55';
+    btn.style.borderColor   = muted ? '#ff6b6b' : 'rgba(255,255,255,0.25)';
+    btn.style.color         = muted ? '#ff6b6b' : 'rgba(255,255,255,0.7)';
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
 function setup() {
   createCanvas(windowWidth, windowHeight);
-
   video = createCapture(VIDEO);
-  video.size(640, 480);
+  video.size(1, 1);
   video.hide();
-
-  handpose = ml5.handpose(video, () => {
-    console.log("HandPose Ready");
-    const hs = document.getElementById('hand-status');
-    if (hs) { hs.innerHTML = "Active"; hs.className = "val"; }
-  });
-
-  handpose.on("predict", results => {
-    predictions = results;
-  });
 }
 
 // ---------------------------------------------------------------------------
-// Start (called after user gesture)
+// Start
 // ---------------------------------------------------------------------------
 async function startApp() {
   if (isStarted) return;
 
   try {
     await Tone.start();
-    console.log("Audio context started");
 
     mic = new Tone.UserMedia();
     await mic.open();
-    console.log("Mic opened successfully");
 
-    // Get the underlying MediaStream.
-    // Tone wraps the stream; try known internal properties first.
     let streamToUse =
       mic._stream ||
       (mic.stream && mic.stream._nativeStream) ||
       mic.stream;
 
     if (!streamToUse || !(streamToUse instanceof MediaStream)) {
-      console.warn("Tone stream not accessible — requesting stream directly...");
       streamToUse = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     }
 
-    // Harmony effects chain
-    pitchShift3rd = new Tone.PitchShift({ pitch: 4, windowSize: 0.1 }).toDestination();
-    pitchShift5th = new Tone.PitchShift({ pitch: 7, windowSize: 0.1 }).toDestination();
+    // Soprano — dry signal via a Gain node so we can mute it independently
+    sopranoDry = new Tone.Gain(1).toDestination();
+    mic.connect(sopranoDry);
 
-    mic.connect(pitchShift3rd);
-    mic.connect(pitchShift5th);
-    mic.connect(Tone.Destination);
+    // Alto, Tenor, Bass pitch shifters
+    for (let i = 0; i < 3; i++) {
+      const ps = new Tone.PitchShift({ pitch: 0, windowSize: 0.08 }).toDestination();
+      ps.wet.value = 0.85;
+      mic.connect(ps);
+      pitchShifters.push(ps);
+    }
 
-    pitchShift3rd.wet.value = 0;
-    pitchShift5th.wet.value = 0;
-
-    // Pitch detection via AnalyserNode + YIN — no ScriptProcessor needed.
-    // This avoids the Chrome 130+ removal of createScriptProcessor which
-    // breaks ml5.pitchDetection internally.
-    const rawCtx = Tone.getContext().rawContext;
-    analyser = rawCtx.createAnalyser();
+    // AnalyserNode for YIN
+    const rawCtx  = Tone.getContext().rawContext;
+    analyser      = rawCtx.createAnalyser();
     analyser.fftSize = 2048;
-    pitchBuffer = new Float32Array(analyser.fftSize);
+    pitchBuffer   = new Float32Array(analyser.fftSize);
+    const micSrc  = rawCtx.createMediaStreamSource(streamToUse);
+    micSrc.connect(analyser);
 
-    const micSource = rawCtx.createMediaStreamSource(streamToUse);
-    micSource.connect(analyser);
-
-    console.log("Pitch Model Ready (AnalyserNode + YIN)");
     const ms = document.getElementById('model-status');
-    if (ms) { ms.innerHTML = "Ready"; ms.className = "val"; }
+    if (ms) { ms.innerHTML = 'Ready'; ms.style.color = '#00ffcc'; }
 
+    syncMuteButtons();
     isStarted = true;
 
   } catch (e) {
-    console.error("Critical Start Error:", e);
+    console.error('Start error:', e);
     const ms = document.getElementById('model-status');
-    if (ms) { ms.innerHTML = "Error"; ms.className = "val warn"; }
+    if (ms) { ms.innerHTML = 'Error: ' + e.message; ms.style.color = '#ff4444'; }
   }
 }
 
 // ---------------------------------------------------------------------------
-// YIN pitch detection algorithm
-// Estimates fundamental frequency from a float PCM buffer.
-// Returns frequency in Hz, or -1 if no clear pitch is found.
+// YIN pitch detection
 // ---------------------------------------------------------------------------
 function yinPitch(buffer, sampleRate) {
   const threshold = 0.15;
-  const halfLen = Math.floor(buffer.length / 2);
-  const yinBuf = new Float32Array(halfLen);
+  const halfLen   = Math.floor(buffer.length / 2);
+  const yinBuf    = new Float32Array(halfLen);
 
-  // Difference function
   for (let tau = 0; tau < halfLen; tau++) {
     let sum = 0;
     for (let i = 0; i < halfLen; i++) {
@@ -122,15 +197,13 @@ function yinPitch(buffer, sampleRate) {
     yinBuf[tau] = sum;
   }
 
-  // Cumulative mean normalised difference
   yinBuf[0] = 1;
   let runningSum = 0;
   for (let tau = 1; tau < halfLen; tau++) {
-    runningSum += yinBuf[tau];
+    runningSum  += yinBuf[tau];
     yinBuf[tau] *= tau / runningSum;
   }
 
-  // Absolute threshold — find first tau below threshold
   let tau = 2;
   while (tau < halfLen) {
     if (yinBuf[tau] < threshold) {
@@ -142,7 +215,6 @@ function yinPitch(buffer, sampleRate) {
 
   if (tau === halfLen || yinBuf[tau] >= threshold) return -1;
 
-  // Parabolic interpolation for sub-sample accuracy
   const x0 = tau > 1 ? tau - 1 : tau;
   const x2 = tau + 1 < halfLen ? tau + 1 : tau;
   let betterTau;
@@ -159,150 +231,252 @@ function yinPitch(buffer, sampleRate) {
 }
 
 // ---------------------------------------------------------------------------
-// Draw loop
-// ---------------------------------------------------------------------------
-function draw() {
-  background(10, 10, 20);
-
-  // Draw mirrored video ONLY inside push/pop
-  push();
-  translate(width, 0);
-  scale(-1, 1);
-  tint(255, 40);
-  image(video, 0, 0, width, height);
-  pop();
-  // Mirror block closed — hand logic runs in normal (unmirrored) space
-
-  if (predictions && predictions.length > 0) {
-    drawKeypoints();
-    updateHarmony();
-  }
-
-  if (isStarted) {
-    updatePitch();
-    handleAudioDSP();
-    renderVisuals();
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Read pitch from analyser buffer each frame
+// Update pitch each frame
 // ---------------------------------------------------------------------------
 function updatePitch() {
   if (!analyser) return;
   analyser.getFloatTimeDomainData(pitchBuffer);
 
-  // Skip if signal is too quiet — avoids false pitch readings on silence
   let rms = 0;
   for (let i = 0; i < pitchBuffer.length; i++) rms += pitchBuffer[i] * pitchBuffer[i];
   rms = Math.sqrt(rms / pitchBuffer.length);
 
-  if (rms < 0.01) {
-    currentFreq = lerp(currentFreq, 0, 0.1);
-    return;
-  }
+  if (rms < 0.008) { currentFreq = lerp(currentFreq, 0, 0.12); return; }
 
   const sampleRate = Tone.getContext().rawContext.sampleRate;
-  const detected = yinPitch(pitchBuffer, sampleRate);
-
-  if (detected > 60 && detected < 1200) {
-    currentFreq = lerp(currentFreq, detected, 0.35);
+  const detected   = yinPitch(pitchBuffer, sampleRate);
+  if (detected > 60 && detected < 1400) {
+    currentFreq = lerp(currentFreq, detected, 0.3);
   } else {
     currentFreq = lerp(currentFreq, 0, 0.08);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Harmony wet/dry control based on hand gesture state
+// Choir DSP
 // ---------------------------------------------------------------------------
-function handleAudioDSP() {
-  if (!pitchShift3rd || !pitchShift5th) return;
-  const active = currentFreq > 50;
-  pitchShift3rd.wet.rampTo(active && harmonyState >= 2 ? 0.8 : 0, 0.1);
-  pitchShift5th.wet.rampTo(active && harmonyState >= 3 ? 0.8 : 0, 0.1);
+function updateChoirDSP() {
+  if (!pitchShifters.length || currentFreq < 50) {
+    for (const ps of pitchShifters) ps.wet.rampTo(0, 0.2);
+    return;
+  }
+
+  updateKeyHistory(currentFreq);
+  const key       = estimateKey();
+  const inputMidi = 12 * Math.log2(currentFreq / 440) + 69;
+
+  voicePitches[0] = inputMidi;
+
+  const harmonyVoices = [VOICES[1], VOICES[2], VOICES[3]];
+  const searchOffsets = [-5, -12, -19];
+
+  harmonyVoices.forEach((voice, i) => {
+    const targetMidi = snapToChordToneInRange(
+      inputMidi + searchOffsets[i], key, voice.range[0], voice.range[1]
+    );
+    voicePitches[i + 1]      = targetMidi;
+    pitchShifters[i].pitch   = midiToShift(currentFreq, targetMidi);
+    // Only set wet if not muted
+    if (!voiceMuted[i + 1]) pitchShifters[i].wet.rampTo(0.85, 0.05);
+  });
 }
 
 // ---------------------------------------------------------------------------
-// Visual feedback — frequency dot + harmony dots
+// Draw loop
 // ---------------------------------------------------------------------------
-function renderVisuals() {
-  if (currentFreq < 50) return;
+function draw() {
+  background(8, 8, 16);
 
-  const y = map(currentFreq, 80, 1000, height * 0.85, height * 0.15);
-  const sz = 80;
+  if (isStarted) {
+    updatePitch();
+    updateChoirDSP();
+  }
 
+  drawChoir();
+  updateUI();
+}
+
+// ---------------------------------------------------------------------------
+// Draw the four choir blobs
+// ---------------------------------------------------------------------------
+function drawChoir() {
+  const singing = currentFreq > 50;
+  const rms     = getAmplitude();
+
+  for (let i = 0; i < 4; i++) {
+    const muted  = voiceMuted[i];
+    // Muted voices have very low, still animation
+    const target = (!singing || muted)
+      ? 0.04
+      : (0.4 + rms * 1.2 + noise(frameCount * 0.04 + i * 10) * 0.15);
+    voiceAmps[i]  = lerp(voiceAmps[i], target, 0.12);
+    mouthPhase[i] += 0.08 + voiceAmps[i] * 0.12;
+  }
+
+  const positions = getVoicePositions();
+  const labels    = ["Soprano\n(you)", "Alto", "Tenor", "Bass"];
+
+  for (let i = 0; i < 4; i++) {
+    const [bx, by]   = positions[i];
+    const amp        = voiceAmps[i];
+    const [r, g, b]  = VOICES[i].color;
+    const muted      = voiceMuted[i];
+
+    drawBlob(bx, by, amp, r, g, b, mouthPhase[i], singing && i === 0, muted);
+
+    // Voice label
+    noStroke();
+    fill(r, g, b, muted ? 80 : 180);
+    textAlign(CENTER, TOP);
+    textSize(13);
+    textFont('monospace');
+    text(labels[i], bx, by + blobRadius(amp) + 18);
+
+    // Note name
+    if (singing && !muted && voicePitches[i] > 0) {
+      const m    = Math.round(voicePitches[i]);
+      const note = scaleArr[((m % 12) + 12) % 12];
+      fill(r, g, b, 120);
+      textSize(11);
+      text(note, bx, by + blobRadius(amp) + 36);
+    }
+
+    // "MUTED" label over blob
+    if (muted) {
+      fill(255, 80, 80, 180);
+      textSize(11);
+      textAlign(CENTER, CENTER);
+      textFont('monospace');
+      text('MUTED', bx, by);
+    }
+  }
+
+  // Key display
+  if (singing) {
+    const key      = estimateKey();
+    const keyName  = scaleArr[key.root];
+    const modeName = key.scale === MAJOR_SCALE ? 'major' : 'minor';
+    fill(255, 255, 255, 60);
+    textAlign(CENTER, BOTTOM);
+    textSize(12);
+    textFont('monospace');
+    text(`Key: ${keyName} ${modeName}`, width / 2, height - 60);
+  }
+}
+
+function blobRadius(amp) { return 55 + amp * 30; }
+
+function getVoicePositions() {
+  const y   = height * 0.46;
+  const gap = width / 5;
+  return [
+    [gap * 1, y],
+    [gap * 2, y],
+    [gap * 3, y],
+    [gap * 4, y],
+  ];
+}
+
+function drawBlob(x, y, amp, r, g, b, phase, isUser, muted) {
+  const baseR   = blobRadius(amp);
+  const opacity = muted ? 0.35 : 1;
+
+  // Outer glow
+  noFill();
+  stroke(r, g, b, (20 + amp * 30) * opacity);
+  strokeWeight(baseR * 0.35);
+  ellipse(x, y, baseR * 2.6);
+
+  // Body
   noStroke();
+  fill(r, g, b, (200 + amp * 40) * opacity);
+  const bodyW = baseR * 2 + sin(phase * 0.7) * amp * 8;
+  const bodyH = baseR * 2.1 + cos(phase * 0.5) * amp * 6;
+  ellipse(x, y, bodyW, bodyH);
 
-  // Root note
-  fill(255);
-  ellipse(width / 2, y, sz);
+  // Highlight
+  fill(255, 255, 255, (50 + amp * 40) * opacity);
+  ellipse(x - baseR * 0.2, y - baseR * 0.25, baseR * 0.55, baseR * 0.4);
 
-  // Third (activated at harmonyState >= 2)
-  if (harmonyState >= 2) {
-    fill(0, 255, 200, 160);
-    ellipse(width / 2 - 160, y + 30, sz * 0.7);
+  // Mouth
+  const mouthW = baseR * 0.55;
+  const mouthH = muted ? 3 : max(2, amp * baseR * 0.55);
+  fill(20, 10, 30, 220 * opacity);
+  noStroke();
+  ellipse(x, y + baseR * 0.28, mouthW, mouthH);
+
+  // Eyes — X eyes when muted
+  fill(20, 10, 30, 200 * opacity);
+  const eyeY   = y - baseR * 0.15;
+  const eyeGap = baseR * 0.22;
+  const eyeR   = baseR * 0.13;
+  if (muted) {
+    // Draw X eyes
+    stroke(20, 10, 30, 200);
+    strokeWeight(2);
+    const s = eyeR * 0.6;
+    line(x - eyeGap - s, eyeY - s, x - eyeGap + s, eyeY + s);
+    line(x - eyeGap + s, eyeY - s, x - eyeGap - s, eyeY + s);
+    line(x + eyeGap - s, eyeY - s, x + eyeGap + s, eyeY + s);
+    line(x + eyeGap + s, eyeY - s, x + eyeGap - s, eyeY + s);
+    noStroke();
+  } else {
+    ellipse(x - eyeGap, eyeY, eyeR, eyeR);
+    ellipse(x + eyeGap, eyeY, eyeR, eyeR);
   }
 
-  // Fifth (activated at harmonyState >= 3)
-  if (harmonyState >= 3) {
-    fill(255, 50, 255, 160);
-    ellipse(width / 2 + 160, y + 30, sz * 0.7);
+  // User halo
+  if (isUser) {
+    noFill();
+    stroke(255, 255, 200, 120);
+    strokeWeight(1.5);
+    ellipse(x, y, bodyW + 14, bodyH + 14);
+    noStroke();
   }
+}
 
-  // Note name in UI panel
+// ---------------------------------------------------------------------------
+// Click on canvas — toggle mute if clicking on a blob
+// ---------------------------------------------------------------------------
+function mousePressed() {
+  if (!isStarted) return;
+  const positions = getVoicePositions();
+  for (let i = 0; i < 4; i++) {
+    const [bx, by] = positions[i];
+    const r = blobRadius(voiceAmps[i]);
+    if (dist(mouseX, mouseY, bx, by) < r) {
+      toggleMute(i);
+      return;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+function getAmplitude() {
+  if (!analyser) return 0;
+  let sum = 0;
+  for (let i = 0; i < pitchBuffer.length; i++) sum += pitchBuffer[i] * pitchBuffer[i];
+  return Math.sqrt(sum / pitchBuffer.length) * 6;
+}
+
+// ---------------------------------------------------------------------------
+function updateUI() {
+  const singing = currentFreq > 50;
+  const ms = document.getElementById('model-status');
+  if (ms && isStarted) ms.innerHTML = singing ? 'Singing' : 'Listening';
+
   const nd = document.getElementById('note-display');
   if (nd) {
-    const m = Math.round(12 * Math.log2(currentFreq / 440) + 69);
-    nd.innerHTML = scaleArr[((m % 12) + 12) % 12] || "--";
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Determine harmony state from finger count
-// ---------------------------------------------------------------------------
-function updateHarmony() {
-  const mt = document.getElementById('harmony-mode');
-  if (!predictions[0]) return;
-
-  let fingerCount = 0;
-  const l = predictions[0].landmarks;
-
-  // Thumb: in mirrored video a right hand's thumb tip appears to the
-  // RIGHT of its knuckle, so comparison is the opposite of a raw feed.
-  if (l[4][0] > l[3][0]) fingerCount++;
-
-  // Index to pinky: tip y < pip y means finger is extended
-  const tips  = [8, 12, 16, 20];
-  const bases = [6, 10, 14, 18];
-  for (let i = 0; i < 4; i++) {
-    if (l[tips[i]][1] < l[bases[i]][1]) fingerCount++;
+    if (singing) {
+      const m = Math.round(12 * Math.log2(currentFreq / 440) + 69);
+      nd.innerHTML = scaleArr[((m % 12) + 12) % 12] || '--';
+    } else {
+      nd.innerHTML = '--';
+    }
   }
 
-  if (fingerCount >= 4) {
-    harmonyState = 3;
-    if (mt) { mt.innerHTML = "Trio (1-3-5)"; mt.className = "val"; }
-  } else if (fingerCount >= 2) {
-    harmonyState = 2;
-    if (mt) { mt.innerHTML = "Duet (1-3)"; mt.className = "val"; }
-  } else {
-    harmonyState = 1;
-    if (mt) { mt.innerHTML = "Solo"; mt.className = "val"; }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Draw hand skeleton dots, mirroring X to match flipped video
-// ---------------------------------------------------------------------------
-function drawKeypoints() {
-  const l = predictions[0].landmarks;
-  noStroke();
-  fill(0, 255, 255, 200);
-  for (let i = 0; i < l.length; i++) {
-    // Reverse X direction: map [0,640] to [width,0] to align with mirrored video
-    const x = map(l[i][0], 0, 640, width, 0);
-    const y = map(l[i][1], 0, 480, 0, height);
-    ellipse(x, y, 6);
-  }
+  const hm = document.getElementById('harmony-mode');
+  if (hm) hm.innerHTML = singing ? 'SATB Choir' : 'Silent';
 }
 
 // ---------------------------------------------------------------------------
