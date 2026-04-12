@@ -1,36 +1,172 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Digital Choir V3</title>
+    <link rel="icon" href="data:,">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+    <script src="https://unpkg.com/ml5@0.12.2/dist/ml5.min.js"></script>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #000;
+        color: white;
+        font-family: 'Courier New', monospace;
+        overflow: hidden;
+      }
 
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Smart Vocal Harmonizer</title>
-  <link rel="stylesheet" href="style.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
-  <script src="https://unpkg.com/ml5@0.12.2/dist/ml5.min.js"></script>
+      #ui-container {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        background: rgba(0, 0, 0, 0.75);
+        padding: 20px 24px;
+        border-radius: 4px;
+        z-index: 100;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        min-width: 220px;
+        backdrop-filter: blur(6px);
+      }
 
-</head>
+      #ui-container h2 {
+        margin: 0 0 14px;
+        font-size: 1rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: #fff;
+        font-weight: 400;
+      }
 
-<body>
+      .ui-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 6px;
+        font-size: 0.75rem;
+        color: rgba(255,255,255,0.5);
+        letter-spacing: 0.05em;
+      }
 
-  <div id="ui-container">
-    <h2>Smart Harmonizer</h2>
-    <div class="status">Pitch Model Status: <span id="model-status" style="color:yellow">Loading...</span></div>
-    <div class="status">Hand Detected: <span id="hand-status" class="highlight">Waiting...</span></div>
-    <hr style="border: 0.5px solid #555;">
-    <div class="status">Current Pitch: <span id="note-display" class="highlight">--</span></div>
-    <div class="status">Harmony Mode: <span id="harmony-mode" class="highlight" style="color:#aaa">Muted</span></div>
-  </div>
+      .ui-row span.val {
+        color: #00ffcc;
+        font-weight: 600;
+      }
 
-  <div id="overlay">
-    <h1 style="color: white; margin-bottom: 20px;">Ready to Start?</h1>
-    <p style="color: #aaa; margin-bottom: 30px;">Please allow camera and microphone access</p>
-    <button id="start-btn" onclick="startApp()" disabled>Loading Models...</button>
-  </div>
+      .ui-row span.val.warn { color: #ffcc00; }
+      .ui-row span.val.muted { color: rgba(255,255,255,0.25); }
 
-  <script src="sketch.js"></script>
+      hr.divider {
+        border: none;
+        border-top: 1px solid rgba(255,255,255,0.08);
+        margin: 12px 0;
+      }
 
-</body>
+      /* Overlay */
+      #overlay {
+        position: fixed;
+        inset: 0;
+        background: #000;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
+        flex-direction: column;
+        gap: 0;
+      }
 
+      .overlay-inner {
+        text-align: center;
+        padding: 40px;
+      }
+
+      .overlay-inner h1 {
+        font-family: 'Courier New', monospace;
+        font-size: clamp(2rem, 5vw, 3.5rem);
+        font-weight: 400;
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
+        margin: 0 0 8px;
+        color: #fff;
+      }
+
+      .overlay-inner .sub {
+        font-size: 0.8rem;
+        letter-spacing: 0.2em;
+        color: rgba(255,255,255,0.35);
+        margin-bottom: 48px;
+        text-transform: uppercase;
+      }
+
+      .start-btn {
+        display: inline-block;
+        padding: 14px 48px;
+        font-family: 'Courier New', monospace;
+        font-size: 0.85rem;
+        letter-spacing: 0.25em;
+        text-transform: uppercase;
+        background: transparent;
+        color: #00ffcc;
+        border: 1px solid #00ffcc;
+        border-radius: 2px;
+        cursor: pointer;
+        transition: background 0.2s, color 0.2s;
+      }
+
+      .start-btn:hover {
+        background: #00ffcc;
+        color: #000;
+      }
+
+      .hint {
+        margin-top: 24px;
+        font-size: 0.7rem;
+        color: rgba(255,255,255,0.2);
+        letter-spacing: 0.1em;
+      }
+    </style>
+  </head>
+  <body>
+
+    <div id="ui-container">
+      <h2>Digital Choir V3</h2>
+      <div class="ui-row">
+        <span>Pitch Model</span>
+        <span id="model-status" class="val warn">Initialising</span>
+      </div>
+      <div class="ui-row">
+        <span>Note</span>
+        <span id="note-display" class="val">--</span>
+      </div>
+      <hr class="divider">
+      <div class="ui-row">
+        <span>Hand Tracking</span>
+        <span id="hand-status" class="val muted">Waiting</span>
+      </div>
+      <div class="ui-row">
+        <span>Harmony</span>
+        <span id="harmony-mode" class="val muted">Muted</span>
+      </div>
+    </div>
+
+    <div id="overlay">
+      <div class="overlay-inner">
+        <h1>Vocal Harmonizer</h1>
+        <p class="sub">Digital Choir &mdash; Gesture-controlled 1·3·5 harmony</p>
+        <button class="start-btn" onclick="startExperience()">Start</button>
+        <p class="hint">Allow microphone &amp; camera access when prompted</p>
+      </div>
+    </div>
+
+    <script src="sketch.js"></script>
+    <script>
+      async function startExperience() {
+        document.getElementById('overlay').style.display = 'none';
+        if (typeof startApp === "function") {
+          await startApp();
+        }
+      }
+    </script>
+  </body>
 </html>
