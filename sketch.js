@@ -21,7 +21,82 @@ const PRESETS = [
   { name: 'Gospel', intervals: [4, 7, 11], color: '#88ffaa' },
 ];
 
-let currentPreset = 0; // index into PRESETS
+let currentPreset = 0;   // index into PRESETS
+let autoMode = true; // auto-detect harmony vs manual
+
+// Pitch class histogram — tracks which notes you've been singing
+const pitchHist = new Array(12).fill(0);
+// Pitch stability tracking — how much pitch is moving frame to frame
+let lastDetectedMidi = 0;
+let pitchStability = 0; // 0=moving, 1=very stable
+let stableFrames = 0;
+
+// Semitone offsets that distinguish major vs minor context:
+// major third interval (4 semitones) above root = major feel
+// minor third interval (3 semitones) above root = minor feel
+const MAJOR_THIRD_WEIGHT = [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]; // +4 from any root
+const MINOR_THIRD_WEIGHT = [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]; // +3 from any root
+
+function updatePitchHistory(midi) {
+  const pc = ((Math.round(midi) % 12) + 12) % 12;
+  pitchHist[pc] += 1;
+  for (let i = 0; i < 12; i++) pitchHist[i] *= 0.992; // slow decay
+}
+
+// Returns 'major', 'minor', or 'neutral' based on singing history
+function detectMajorMinor() {
+  const total = pitchHist.reduce((a, b) => a + b, 0);
+  if (total < 2) return 'neutral'; // not enough history yet
+
+  // For each possible root, score how much the pitch history
+  // resembles a major vs minor scale pattern
+  let majorScore = 0, minorScore = 0;
+
+  for (let root = 0; root < 12; root++) {
+    const rootWeight = pitchHist[root];
+    if (rootWeight < 0.1) continue;
+    // Major: check if notes a major third (4st) and fifth (7st) above are present
+    majorScore += rootWeight * (pitchHist[(root + 4) % 12] + pitchHist[(root + 7) % 12]);
+    // Minor: check if notes a minor third (3st) and fifth (7st) above are present
+    minorScore += rootWeight * (pitchHist[(root + 3) % 12] + pitchHist[(root + 7) % 12]);
+  }
+
+  if (majorScore > minorScore * 1.15) return 'major';
+  if (minorScore > majorScore * 1.15) return 'minor';
+  return 'neutral';
+}
+
+// Auto-selects the best preset based on:
+// 1. Major/minor context from pitch history
+// 2. Pitch stability (stable = Gospel lush, moving = Major/Minor clean)
+// 3. Pitch register (high singing = Octave for fullness)
+function autoSelectPreset(currentMidi) {
+  if (!autoMode) return;
+
+  const context = detectMajorMinor();
+  const isHigh = currentMidi > 72;  // above C5 = high voice
+  const isStable = pitchStability > 0.7;
+
+  let targetPreset;
+
+  if (isHigh) {
+    // High notes — use Octave to add depth below
+    targetPreset = 2; // Octave
+  } else if (isStable && context === 'major') {
+    // Stable major — Gospel for lush sustained sound
+    targetPreset = 4; // Gospel
+  } else if (context === 'minor') {
+    targetPreset = 1; // Minor
+  } else if (context === 'major') {
+    targetPreset = 0; // Major
+  } else {
+    targetPreset = 0; // Default to Major
+  }
+
+  if (targetPreset !== currentPreset) {
+    setPreset(targetPreset, true);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Voice definitions (visuals)
@@ -43,13 +118,21 @@ const voiceMuted = [true, false, false, false];
 // ---------------------------------------------------------------------------
 let mic, micGate, analyser, pitchBuffer;
 let isStarted = false;
-let isSinging = false;
+let isSinging = true;  // always on — no push-to-sing gate
 let currentFreq = 0;
 let lastValidFreq = 0;
 
 let pitchShifters = [];
 let voiceGains = [];
 let roomReverb;
+
+// Hand tracking — pinch controls harmony volume
+let handpose, predictions = [];
+let harmonyVolume = 0.8;  // default full — pinch adjusts when hand detected
+let pinchOpen = false; // current pinch state for visual feedback
+// Pinch distance thresholds (in normalised 0-640 landmark space)
+const PINCH_OPEN = 100;  // distance above this = fully open
+const PINCH_CLOSED = 20;   // distance below this = fully closed
 
 let voiceAmps = [0, 0, 0, 0];
 let mouthPhase = [0, 0, 0, 0];
@@ -60,7 +143,9 @@ const scaleArr = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B
 // ---------------------------------------------------------------------------
 // Preset switching
 // ---------------------------------------------------------------------------
-function setPreset(index) {
+function setPreset(index, fromAuto) {
+  // If called manually (not from auto), disable auto mode
+  if (!fromAuto) autoMode = false;
   currentPreset = index;
   if (!isStarted) { syncPresetButtons(); return; }
 
@@ -73,21 +158,43 @@ function setPreset(index) {
   updateHarmonyLabel();
 }
 
+function enableAutoMode() {
+  autoMode = true;
+  // Clear pitch history so auto-detection starts fresh
+  pitchHist.fill(0);
+  stableFrames = 0;
+  pitchStability = 0;
+  syncPresetButtons();
+  const hm = document.getElementById('harmony-mode');
+  if (hm) hm.innerHTML = 'Auto';
+}
+
 function syncPresetButtons() {
+  // Auto button
+  const autoBtn = document.getElementById('preset-btn-auto');
+  if (autoBtn) {
+    autoBtn.style.background = autoMode ? '#ffffff' : 'transparent';
+    autoBtn.style.color = autoMode ? '#08080f' : 'rgba(255,255,255,0.6)';
+    autoBtn.style.borderColor = autoMode ? '#ffffff' : 'rgba(255,255,255,0.2)';
+  }
+  // Preset buttons — dim all when auto is on, highlight active when manual
   PRESETS.forEach((p, i) => {
     const btn = document.getElementById('preset-btn-' + i);
     if (!btn) return;
-    const active = i === currentPreset;
+    const active = !autoMode && i === currentPreset;
     btn.style.background = active ? p.color : 'transparent';
     btn.style.color = active ? '#08080f' : p.color;
     btn.style.borderColor = active ? p.color : 'rgba(255,255,255,0.2)';
-    btn.style.opacity = '1';
+    btn.style.opacity = autoMode ? '0.4' : '1';
   });
 }
 
 function updateHarmonyLabel() {
   const hm = document.getElementById('harmony-mode');
-  if (hm) hm.innerHTML = PRESETS[currentPreset].name;
+  if (!hm) return;
+  hm.innerHTML = autoMode
+    ? 'Auto → ' + PRESETS[currentPreset].name
+    : PRESETS[currentPreset].name;
 }
 
 // ---------------------------------------------------------------------------
@@ -114,37 +221,10 @@ function syncMuteButtons() {
 }
 
 // ---------------------------------------------------------------------------
-// Push-to-sing
+// Keyboard shortcuts
 // ---------------------------------------------------------------------------
-function openMic() {
-  if (!isStarted || isSinging) return;
-  isSinging = true;
-  if (micGate) micGate.gain.rampTo(1, 0.05);
-  updateSingButton(true);
-}
-
-function closeMic() {
-  if (!isStarted || !isSinging) return;
-  isSinging = false;
-  if (micGate) micGate.gain.rampTo(0, 0.15);
-  currentFreq = 0;
-  updateSingButton(false);
-}
-
-function updateSingButton(active) {
-  const btn = document.getElementById('sing-btn');
-  if (!btn) return;
-  btn.textContent = active ? 'Release to stop' : 'Hold to sing';
-  btn.style.background = active ? 'rgba(0,255,150,0.15)' : 'transparent';
-  btn.style.borderColor = active ? '#00ff96' : 'rgba(0,255,204,0.4)';
-  btn.style.color = active ? '#00ff96' : '#00ffcc';
-}
-
-function keyPressed() { if (key === ' ') { openMic(); return false; } }
-function keyReleased() { if (key === ' ') { closeMic(); return false; } }
-
-// Number keys 1-5 switch presets
 function keyTyped() {
+  if (key === '0') { enableAutoMode(); return; }
   const n = parseInt(key);
   if (n >= 1 && n <= PRESETS.length) setPreset(n - 1);
 }
@@ -154,6 +234,18 @@ function keyTyped() {
 // ---------------------------------------------------------------------------
 function setup() {
   createCanvas(windowWidth, windowHeight);
+  pixelDensity(1);
+
+  // Initialise handpose using the webcam
+  // We create a small hidden video just for hand tracking
+  const handVideo = createCapture(VIDEO);
+  handVideo.size(320, 240);
+  handVideo.hide();
+
+  handpose = ml5.handpose(handVideo, () => {
+    console.log('[Choir] HandPose ready');
+  });
+  handpose.on('predict', results => { predictions = results; });
 }
 
 // ---------------------------------------------------------------------------
@@ -204,14 +296,15 @@ async function startApp() {
       roomReverb = new Tone.Gain(1).connect(master);
     }
 
-    // Mic gate
-    micGate = new Tone.Gain(0);
+    // Mic always open — pinch controls harmony volume
+    micGate = new Tone.Gain(1);
     mic.connect(micGate);
 
-    // Soprano is NOT routed to speakers.
-    // The user hears their own voice naturally (bone conduction + air).
-    // Routing it to speakers causes feedback and clashes with harmony.
-    // sopranoDry intentionally omitted.
+    // Soprano dry — always on, fixed level, so user hears their own
+    // voice regardless of pinch state. Routes through reverb so it
+    // sits in the same acoustic space as the harmony voices.
+    const sopranoDry = new Tone.Gain(0.85).connect(roomReverb);
+    micGate.connect(sopranoDry);
 
     // Three harmony voices — intervals come from the active preset
     const preset = PRESETS[currentPreset];
@@ -224,6 +317,7 @@ async function startApp() {
       });
       ps.wet.value = 1.0;
 
+      // Default 0.8 — pinch overrides when hand is detected
       const vg = new Tone.Gain(voiceMuted[i + 1] ? 0 : 0.8);
       micGate.connect(ps);
       ps.connect(vg);
@@ -237,7 +331,6 @@ async function startApp() {
     setStatus('Ready', '#00ffcc');
     syncMuteButtons();
     syncPresetButtons();
-    updateSingButton(false);
     updateHarmonyLabel();
 
   } catch (e) {
@@ -245,6 +338,25 @@ async function startApp() {
     const el = document.getElementById('model-status');
     if (el) { el.innerHTML = 'Error: ' + e.message; el.style.color = '#ff4444'; }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Pinch detection — returns 0.0 (closed) to 1.0 (fully open)
+// ---------------------------------------------------------------------------
+function getPinchOpenness() {
+  if (!predictions || predictions.length === 0) return -1; // no hand
+
+  const lm = predictions[0].landmarks;
+  const thumbTip = lm[4];   // thumb tip
+  const indexTip = lm[8];   // index finger tip
+
+  // 2D distance between thumb and index tip in landmark space
+  const dx = thumbTip[0] - indexTip[0];
+  const dy = thumbTip[1] - indexTip[1];
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  // Map distance to 0–1 openness
+  return constrain(map(dist, PINCH_CLOSED, PINCH_OPEN, 0, 1), 0, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -288,8 +400,27 @@ function updatePitch() {
   if (detected > 60 && detected < 1400) {
     currentFreq = lerp(currentFreq, detected, 0.2);
     lastValidFreq = currentFreq;
+
+    // Track pitch history and stability for auto-preset selection
+    const currentMidi = 12 * Math.log2(currentFreq / 440) + 69;
+    updatePitchHistory(currentMidi);
+
+    // Stability: how close is current midi to last frame's midi
+    const delta = Math.abs(currentMidi - lastDetectedMidi);
+    if (delta < 0.8) {
+      stableFrames = min(stableFrames + 1, 60);
+    } else {
+      stableFrames = max(stableFrames - 3, 0);
+    }
+    pitchStability = stableFrames / 60;
+    lastDetectedMidi = currentMidi;
+
+    // Auto-select harmony preset based on what we've detected
+    autoSelectPreset(currentMidi);
   } else {
     currentFreq = lerp(currentFreq, 0, 0.05);
+    stableFrames = max(stableFrames - 1, 0);
+    pitchStability = stableFrames / 60;
   }
 }
 
@@ -301,150 +432,202 @@ function updateVisualNotes() {
   PRESETS[currentPreset].intervals.forEach((interval, i) => {
     const m = Math.round(inputMidi + interval);
     voiceNotes[i + 1] = scaleArr[((m % 12) + 12) % 12];
-    if (!voiceMuted[i + 1]) voiceGains[i].gain.rampTo(0.8, 0.1);
+    // Volume is now driven by pinch — updatePinchVolume handles gain ramps
+    // Just make sure unmuted voices are eligible (gain set by pinch)
   });
 }
 
 // ---------------------------------------------------------------------------
 // Draw
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Pinch volume control
+// ---------------------------------------------------------------------------
+function updatePinchVolume() {
+  const openness = getPinchOpenness();
+  if (openness < 0) return; // no hand — hold current volume
+
+  pinchOpen = openness > 0.45;
+
+  // Fast lerp (0.18) = snappy response to pinch movement
+  harmonyVolume = lerp(harmonyVolume, openness, 0.18);
+
+  // Cubic power curve: silent until ~40% open, then swells quickly to full
+  // closed (0.0) → near silent, half-open (0.5) → 0.125, fully open (1.0) → 1.2
+  const gainTarget = Math.pow(harmonyVolume, 2.0) * 1.2;
+
+  // Short ramp (0.03s) so changes feel immediate
+  voiceGains.forEach((vg, i) => {
+    if (!voiceMuted[i + 1]) {
+      vg.gain.rampTo(gainTarget, 0.03);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// updateSingButton stub (kept for safety, no-op since button removed)
+// ---------------------------------------------------------------------------
+function updateSingButton(active) { }
+
 function draw() {
-  background(8, 8, 16);
-  if (isStarted) { updatePitch(); updateVisualNotes(); }
-  drawChoir();
+  // Transparent background — camera feed shows through
+  clear();
+
+  if (isStarted) {
+    updatePitch();
+    updateVisualNotes();
+    updatePinchVolume();
+  }
+
+  drawOrbs();
+  drawHandKeypoints();
   updateUI();
 }
 
-function drawChoir() {
-  const singing = isSinging && currentFreq > 50;
-  const holding = !isSinging && lastValidFreq > 50;
+// ---------------------------------------------------------------------------
+// Glowing orbs — one per voice, float around singer position
+// ---------------------------------------------------------------------------
+
+// Orb state — each orbits at different speed/radius around canvas centre
+const ORB_COLORS = [
+  [255, 210, 180],  // Soprano — warm peach
+  [160, 220, 255],  // Alto    — cool blue
+  [160, 255, 200],  // Tenor   — mint green
+  [210, 170, 255],  // Bass    — soft purple
+];
+
+let orbAngles = [0, 1.5708, 3.1416, 4.7124];
+let orbRadii = [0, 0, 0, 0];   // current orbit radius (animated)
+let orbSizes = [0, 0, 0, 0];   // current glow size
+let orbX = [0, 0, 0, 0];
+let orbY = [0, 0, 0, 0];
+
+// Speed and target orbit radius per voice
+const ORB_SPEED = [0.008, 0.011, 0.009, 0.007];
+const ORB_OFFSET = [0, 1.885, 3.770, 5.655];
+
+function drawOrbs() {
+  const singing = isStarted && currentFreq > 50;
+  const holding = isStarted && !singing && lastValidFreq > 50;
+  const active = singing || holding;
   const rms = getAmplitude();
-  const preset = PRESETS[currentPreset];
+  const cx = width * 0.5;
+  const cy = height * 0.48;
+
+  // Target orbit radius — grows when singing, shrinks when silent
+  const targetOrbitR = active ? min(width, height) * 0.28 : min(width, height) * 0.08;
 
   for (let i = 0; i < 4; i++) {
-    // Soprano (i===0) is always drawn as active regardless of voiceMuted —
-    // it has no speaker output but its visual reacts to the live mic.
-    const visuallyActive = (i === 0) || !voiceMuted[i];
-    let target;
-    if (!visuallyActive) target = 0.04;
-    else if (singing) target = 0.38 + rms * 1.1 + noise(frameCount * 0.04 + i * 10) * 0.12;
-    else if (holding) target = 0.07 + noise(frameCount * 0.015 + i * 10) * 0.05;
-    else target = 0.04;
-    voiceAmps[i] = lerp(voiceAmps[i], target, 0.12);
-    mouthPhase[i] += 0.08 + voiceAmps[i] * 0.12;
-  }
+    // Soprano always visible (it's the user) — others only when harmony active
+    const isUser = i === 0;
+    const audioActive = isUser || (!voiceMuted[i] && harmonyVolume > 0.05);
+    const visualActive = isUser ? active : (active && audioActive);
 
-  const positions = getVoicePositions();
+    // Orbit radius
+    const tR = visualActive ? targetOrbitR * (0.85 + i * 0.08) : (isUser ? 10 : 0);
+    orbRadii[i] = lerp(orbRadii[i], tR, 0.05);
 
-  // Interval labels for harmony voices
-  const intervalLabels = PRESETS[currentPreset].intervals.map(n =>
-    (n > 0 ? '+' : '') + n + ' st'
-  );
-  const labels = ['Soprano\n(you)', ...intervalLabels.map((l, i) => VOICES[i + 1].name + '\n' + l)];
+    // Orbit angle
+    orbAngles[i] += ORB_SPEED[i];
 
-  for (let i = 0; i < 4; i++) {
-    const [bx, by] = positions[i];
-    const amp = voiceAmps[i];
-    const [r, g, b] = VOICES[i].color;
-    // Soprano is visually active (reacts to mic) but has no speaker output.
-    // Other voices show as muted only when their audio is toggled off.
-    const visuallyMuted = (i !== 0) && voiceMuted[i];
+    // Position
+    orbX[i] = cx + cos(orbAngles[i] + ORB_OFFSET[i]) * orbRadii[i];
+    orbY[i] = cy + sin(orbAngles[i] + ORB_OFFSET[i]) * orbRadii[i] * 0.55; // elliptical
 
-    drawBlob(bx, by, amp, r, g, b, mouthPhase[i], singing && i === 0, visuallyMuted);
+    // Size — reacts to amplitude for soprano, to harmonyVolume for others
+    const breathe = 1 + sin(frameCount * 0.04 + i * 1.3) * 0.06;
+    let targetSize;
+    if (isUser) {
+      targetSize = singing ? (60 + rms * 120) * breathe : (active ? 32 : 20);
+    } else {
+      targetSize = visualActive ? (45 + harmonyVolume * 60 + rms * 50) * breathe : 0;
+    }
+    orbSizes[i] = lerp(orbSizes[i], targetSize, 0.1);
+
+    if (orbSizes[i] < 1) continue;
+
+    const [r, g, b] = ORB_COLORS[i];
+    const sz = orbSizes[i];
+    const ox = orbX[i];
+    const oy = orbY[i];
 
     noStroke();
-    fill(r, g, b, visuallyMuted ? 80 : 180);
-    textAlign(CENTER, TOP);
-    textSize(12);
-    textFont('monospace');
-    text(labels[i], bx, by + blobRadius(amp) + 14);
 
-    if ((singing || holding) && !visuallyMuted && voiceNotes[i]) {
-      fill(r, g, b, holding ? 70 : 140);
-      textSize(13);
-      textFont('monospace');
-      text(voiceNotes[i], bx, by + blobRadius(amp) + 44);
+    // Outer soft glow — large, very transparent
+    for (let ring = 4; ring >= 1; ring--) {
+      const alpha = map(ring, 4, 1, 8, 35);
+      const rSz = sz * (1 + ring * 0.5);
+      fill(r, g, b, alpha);
+      ellipse(ox, oy, rSz, rSz);
     }
 
-    if (visuallyMuted) {
-      fill(255, 80, 80, 160);
-      textSize(11);
+    // Core orb
+    fill(r, g, b, isUser ? 200 : 160);
+    ellipse(ox, oy, sz * 0.55, sz * 0.55);
+
+    // Bright centre
+    fill(255, 255, 255, isUser ? 180 : 120);
+    ellipse(ox - sz * 0.08, oy - sz * 0.08, sz * 0.18, sz * 0.18);
+
+    // Note label floating below orb
+    if (active && voiceNotes[i]) {
+      fill(r, g, b, isUser ? 220 : 160);
+      noStroke();
       textAlign(CENTER, CENTER);
-      text('MUTED', bx, by);
+      textSize(isUser ? 16 : 13);
+      textFont('monospace');
+      text(voiceNotes[i], ox, oy + sz * 0.5 + 14);
+    }
+
+    // "you" tag for soprano
+    if (isUser && active) {
+      fill(255, 255, 255, 40);
+      textSize(9);
+      textAlign(CENTER, CENTER);
+      textFont('monospace');
+      text('you', ox, oy + sz * 0.5 + 30);
     }
   }
 
-  // Preset name in centre bottom
-  fill(255, 255, 255, singing ? 70 : holding ? 45 : 20);
-  textAlign(CENTER, BOTTOM);
-  textSize(12);
-  textFont('monospace');
-  text(preset.name + ' harmony', width / 2, height - 72);
-
-  if (!isSinging && lastValidFreq < 50) {
-    fill(255, 255, 255, 22);
-    textAlign(CENTER, CENTER);
-    textSize(13);
-    textFont('monospace');
-    text('Hold SPACE or the button below to sing', width / 2, height * 0.82);
-  }
-  if (holding) {
-    fill(180, 255, 210, 45);
+  // Harmony type label — centre, subtle, only when active
+  if (active) {
+    const preset = PRESETS[currentPreset];
+    fill(255, 255, 255, autoMode ? 50 : 35);
     textAlign(CENTER, CENTER);
     textSize(11);
     textFont('monospace');
-    text('holding chord...', width / 2, height * 0.82);
-  }
-}
-
-function blobRadius(amp) { return 52 + amp * 28; }
-
-function getVoicePositions() {
-  const y = height * 0.44, gap = width / 5;
-  return [[gap, y], [gap * 2, y], [gap * 3, y], [gap * 4, y]];
-}
-
-function drawBlob(x, y, amp, r, g, b, phase, isUser, muted) {
-  const baseR = blobRadius(amp), op = muted ? 0.32 : 1;
-  noFill();
-  stroke(r, g, b, (18 + amp * 28) * op); strokeWeight(baseR * 0.33);
-  ellipse(x, y, baseR * 2.6);
-  noStroke();
-  fill(r, g, b, (195 + amp * 45) * op);
-  const bw = baseR * 2 + sin(phase * 0.7) * amp * 7;
-  const bh = baseR * 2.1 + cos(phase * 0.5) * amp * 5;
-  ellipse(x, y, bw, bh);
-  fill(255, 255, 255, (45 + amp * 38) * op);
-  ellipse(x - baseR * 0.2, y - baseR * 0.25, baseR * 0.52, baseR * 0.38);
-  fill(20, 10, 30, 215 * op); noStroke();
-  ellipse(x, y + baseR * 0.28, baseR * 0.52, muted ? 3 : max(2, amp * baseR * 0.52));
-  const eyeY = y - baseR * 0.15, eyeGap = baseR * 0.22, eyeR = baseR * 0.12;
-  if (muted) {
-    stroke(20, 10, 30, 200); strokeWeight(1.8);
-    const s = eyeR * 0.55;
-    line(x - eyeGap - s, eyeY - s, x - eyeGap + s, eyeY + s);
-    line(x - eyeGap + s, eyeY - s, x - eyeGap - s, eyeY + s);
-    line(x + eyeGap - s, eyeY - s, x + eyeGap + s, eyeY + s);
-    line(x + eyeGap + s, eyeY - s, x + eyeGap - s, eyeY + s);
     noStroke();
-  } else {
-    fill(20, 10, 30, 195 * op);
-    ellipse(x - eyeGap, eyeY, eyeR, eyeR);
-    ellipse(x + eyeGap, eyeY, eyeR, eyeR);
-  }
-  if (isUser) {
-    noFill(); stroke(255, 255, 200, 110); strokeWeight(1.5);
-    ellipse(x, y, bw + 12, bh + 12); noStroke();
+    text((autoMode ? 'auto · ' : '') + preset.name, cx, cy + min(width, height) * 0.42);
   }
 }
 
-function mousePressed() {
-  if (!isStarted) return;
-  const pos = getVoicePositions();
-  for (let i = 0; i < 4; i++) {
-    const [bx, by] = pos[i];
-    if (dist(mouseX, mouseY, bx, by) < blobRadius(voiceAmps[i])) { toggleMute(i); return; }
+// ---------------------------------------------------------------------------
+// Draw hand keypoints as small glowing dots (mirrored to match camera)
+// ---------------------------------------------------------------------------
+function drawHandKeypoints() {
+  if (!predictions || predictions.length === 0) return;
+  const lm = predictions[0].landmarks;
+  noStroke();
+  for (let i = 0; i < lm.length; i++) {
+    // Mirror X to match the flipped camera feed
+    const x = map(lm[i][0], 0, 640, width, 0);
+    const y = map(lm[i][1], 0, 480, 0, height);
+    // Highlight thumb and index tips for pinch visibility
+    const isKey = (i === 4 || i === 8);
+    fill(255, 255, 255, isKey ? 200 : 60);
+    ellipse(x, y, isKey ? 10 : 5);
   }
+
+  // Draw pinch line between thumb and index
+  const tx = map(lm[4][0], 0, 640, width, 0);
+  const ty = map(lm[4][1], 0, 480, 0, height);
+  const ix = map(lm[8][0], 0, 640, width, 0);
+  const iy = map(lm[8][1], 0, 480, 0, height);
+  const openness = getPinchOpenness();
+  stroke(lerp(255, 100, openness), lerp(100, 255, openness), 150, 140);
+  strokeWeight(1.5);
+  line(tx, ty, ix, iy);
+  noStroke();
 }
 
 function getAmplitude() {
@@ -457,20 +640,19 @@ function getAmplitude() {
 function updateUI() {
   const ms = document.getElementById('model-status');
   if (ms && isStarted) {
-    if (isSinging && currentFreq > 50) ms.innerHTML = 'Singing';
-    else if (isSinging) ms.innerHTML = 'Listening';
-    else if (lastValidFreq > 50) ms.innerHTML = 'Holding';
-    else ms.innerHTML = 'Ready';
+    ms.innerHTML = currentFreq > 50 ? 'singing' : lastValidFreq > 50 ? 'holding' : 'listening';
   }
   const nd = document.getElementById('note-display');
   if (nd) {
-    const f = isSinging ? currentFreq : lastValidFreq;
+    const f = currentFreq > 50 ? currentFreq : lastValidFreq;
     nd.innerHTML = f > 50
       ? scaleArr[((Math.round(12 * Math.log2(f / 440) + 69) % 12) + 12) % 12] || '--'
       : '--';
   }
   const hm = document.getElementById('harmony-mode');
-  if (hm) hm.innerHTML = PRESETS[currentPreset].name;
+  if (hm) hm.innerHTML = autoMode
+    ? 'auto → ' + PRESETS[currentPreset].name
+    : PRESETS[currentPreset].name;
 }
 
 function windowResized() { resizeCanvas(windowWidth, windowHeight); }

@@ -7,362 +7,240 @@
   <link rel="icon" href="data:,">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+  <script src="https://unpkg.com/ml5@0.12.2/dist/ml5.min.js"></script>
   <style>
     * {
-      box-sizing: border-box;
       margin: 0;
       padding: 0;
+      box-sizing: border-box;
     }
 
     body {
-      background: #08080f;
-      color: #fff;
-      font-family: 'Courier New', monospace;
+      background: #000;
       overflow: hidden;
+      font-family: 'Courier New', monospace;
+      color: #fff;
     }
 
-    #ui-container {
-      position: absolute;
-      top: 20px;
+    /* Live camera feed — full screen behind canvas */
+    #cam {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+      transform: scaleX(-1);
+      /* mirror */
+      opacity: 0.82;
+    }
+
+    /* p5 canvas sits on top, transparent background */
+    canvas {
+      position: fixed;
+      inset: 0;
+    }
+
+    /* Minimal status — top left, very subtle */
+    #hud {
+      position: fixed;
+      top: 18px;
       left: 20px;
-      background: rgba(0, 0, 0, 0.55);
-      padding: 14px 18px;
-      border-radius: 4px;
-      z-index: 100;
-      border: 1px solid rgba(255, 255, 255, 0.07);
-      min-width: 180px;
+      z-index: 200;
+      pointer-events: none;
     }
 
-    #ui-container h2 {
-      font-size: 0.68rem;
-      letter-spacing: 0.22em;
+    .hud-row {
+      font-size: 0.62rem;
+      letter-spacing: 0.18em;
       text-transform: uppercase;
-      color: rgba(255, 255, 255, 0.3);
-      font-weight: 400;
-      margin-bottom: 10px;
+      color: rgba(255, 255, 255, 0.35);
+      margin-bottom: 3px;
+      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
     }
 
-    .ui-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 4px;
-      font-size: 0.68rem;
-      color: rgba(255, 255, 255, 0.3);
-      letter-spacing: 0.04em;
+    .hud-val {
+      color: rgba(255, 255, 255, 0.75);
+      margin-left: 4px;
     }
 
-    .val {
-      color: #00ffcc;
-    }
-
-    hr.divider {
-      border: none;
-      border-top: 1px solid rgba(255, 255, 255, 0.06);
-      margin: 8px 0;
-    }
-
-    /* ── Bottom bar ── */
-    #bottom-bar {
-      position: absolute;
-      bottom: 20px;
+    /* Preset bar — bottom centre, floating */
+    #preset-bar {
+      position: fixed;
+      bottom: 24px;
       left: 50%;
       transform: translateX(-50%);
       display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 12px;
-      z-index: 100;
-    }
-
-    /* Preset buttons */
-    #preset-bar {
-      display: flex;
       gap: 8px;
+      z-index: 200;
     }
 
     .preset-btn {
-      padding: 6px 14px;
+      padding: 5px 14px;
       font-family: 'Courier New', monospace;
-      font-size: 0.65rem;
-      letter-spacing: 0.1em;
+      font-size: 0.62rem;
+      letter-spacing: 0.12em;
       text-transform: uppercase;
-      background: transparent;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 2px;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 20px;
       cursor: pointer;
-      transition: background 0.15s, color 0.15s, border-color 0.15s;
-      min-width: 64px;
+      color: rgba(255, 255, 255, 0.55);
+      transition: all 0.2s;
+      backdrop-filter: blur(6px);
     }
 
     .preset-btn:hover {
-      opacity: 1 !important;
-    }
-
-    /* Sing button */
-    #sing-btn {
-      padding: 12px 48px;
-      font-family: 'Courier New', monospace;
-      font-size: 0.8rem;
-      letter-spacing: 0.2em;
-      text-transform: uppercase;
-      background: transparent;
-      color: #00ffcc;
-      border: 1px solid rgba(0, 255, 204, 0.4);
-      border-radius: 2px;
-      cursor: pointer;
-      transition: background 0.1s, color 0.1s, border-color 0.1s;
-      user-select: none;
-    }
-
-    #sing-btn:hover {
-      border-color: rgba(0, 255, 204, 0.7);
-    }
-
-    /* Mute bar */
-    #mute-bar {
-      display: flex;
-      gap: 16px;
-    }
-
-    .mute-group {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 4px;
-    }
-
-    .mute-label {
-      font-size: 0.58rem;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: rgba(255, 255, 255, 0.25);
-    }
-
-    .mute-btn {
-      padding: 4px 10px;
-      font-family: 'Courier New', monospace;
-      font-size: 0.6rem;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      background: transparent;
-      color: rgba(255, 255, 255, 0.7);
-      border: 1px solid rgba(255, 255, 255, 0.25);
-      border-radius: 2px;
-      cursor: pointer;
-      transition: color 0.15s, border-color 0.15s, opacity 0.15s;
-      opacity: 0.55;
-      min-width: 56px;
-    }
-
-    .mute-btn:hover {
-      opacity: 1;
+      border-color: rgba(255, 255, 255, 0.5);
+      color: #fff;
     }
 
     /* Overlay */
     #overlay {
       position: fixed;
       inset: 0;
-      background: #08080f;
+      background: rgba(0, 0, 0, 0.92);
       display: flex;
       justify-content: center;
       align-items: center;
-      z-index: 10000;
+      z-index: 1000;
     }
 
     .overlay-inner {
       text-align: center;
+      max-width: 420px;
       padding: 40px;
-      max-width: 500px;
     }
 
     .overlay-inner h1 {
-      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      font-size: clamp(1.6rem, 3.5vw, 2.4rem);
       font-weight: 400;
-      letter-spacing: 0.25em;
+      letter-spacing: 0.3em;
       text-transform: uppercase;
-      margin-bottom: 6px;
+      margin-bottom: 8px;
     }
 
     .sub {
-      font-size: 0.72rem;
-      letter-spacing: 0.16em;
-      color: rgba(255, 255, 255, 0.28);
+      font-size: 0.68rem;
+      letter-spacing: 0.15em;
+      color: rgba(255, 255, 255, 0.3);
       text-transform: uppercase;
-      margin-bottom: 28px;
+      margin-bottom: 32px;
     }
 
-    .instructions {
-      margin-bottom: 28px;
+    .steps {
       display: flex;
       flex-direction: column;
-      gap: 9px;
+      gap: 10px;
       text-align: left;
+      margin-bottom: 32px;
     }
 
-    .instruction-row {
+    .step {
       display: flex;
-      align-items: flex-start;
       gap: 12px;
+      align-items: flex-start;
     }
 
-    .instruction-num {
-      width: 20px;
-      height: 20px;
-      border: 1px solid rgba(0, 255, 204, 0.35);
+    .step-n {
+      width: 18px;
+      height: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.25);
       border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 0.6rem;
-      color: #00ffcc;
+      font-size: 0.55rem;
+      color: rgba(255, 255, 255, 0.4);
       flex-shrink: 0;
       margin-top: 2px;
     }
 
-    .instruction-text {
-      font-size: 0.72rem;
-      color: rgba(255, 255, 255, 0.42);
-      letter-spacing: 0.03em;
+    .step-t {
+      font-size: 0.7rem;
+      color: rgba(255, 255, 255, 0.4);
       line-height: 1.5;
+      letter-spacing: 0.03em;
     }
 
     .start-btn {
       padding: 12px 44px;
       font-family: 'Courier New', monospace;
-      font-size: 0.78rem;
-      letter-spacing: 0.22em;
+      font-size: 0.75rem;
+      letter-spacing: 0.2em;
       text-transform: uppercase;
       background: transparent;
-      color: #00ffcc;
-      border: 1px solid rgba(0, 255, 204, 0.45);
+      color: rgba(255, 255, 255, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.3);
       border-radius: 2px;
       cursor: pointer;
-      transition: background 0.2s, color 0.2s;
+      transition: all 0.2s;
     }
 
     .start-btn:hover {
-      background: #00ffcc;
-      color: #08080f;
-    }
-
-    /* Preset legend in overlay */
-    .preset-legend {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      justify-content: center;
-      margin-bottom: 24px;
-    }
-
-    .legend-pill {
-      padding: 4px 10px;
-      border-radius: 2px;
-      font-size: 0.6rem;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      border: 1px solid;
-      opacity: 0.7;
+      background: #fff;
+      color: #000;
     }
   </style>
 </head>
 
 <body>
 
-  <div id="ui-container">
-    <h2>Digital Choir V3</h2>
-    <div class="ui-row"><span>Status</span><span id="model-status" class="val" style="color:#ffcc00">Standby</span>
-    </div>
-    <div class="ui-row"><span>Note</span><span id="note-display" class="val">--</span></div>
-    <hr class="divider">
-    <div class="ui-row"><span>Harmony</span><span id="harmony-mode" class="val">--</span></div>
+  <!-- Camera feed behind everything -->
+  <video id="cam" autoplay playsinline muted></video>
+
+  <!-- HUD -->
+  <div id="hud">
+    <div class="hud-row">note <span id="note-display" class="hud-val">--</span></div>
+    <div class="hud-row">harmony <span id="harmony-mode" class="hud-val">--</span></div>
+    <div class="hud-row"><span id="model-status"
+        style="color:rgba(255,255,255,0.25);font-size:0.58rem;letter-spacing:0.12em"></span></div>
   </div>
 
-  <div id="bottom-bar">
-    <!-- Harmony presets -->
-    <div id="preset-bar">
-      <button id="preset-btn-0" class="preset-btn" style="color:#00ffcc;border-color:rgba(0,255,204,0.3)"
-        onclick="setPreset(0)">Major</button>
-      <button id="preset-btn-1" class="preset-btn" style="color:#aa88ff;border-color:rgba(170,136,255,0.3)"
-        onclick="setPreset(1)">Minor</button>
-      <button id="preset-btn-2" class="preset-btn" style="color:#ffaa00;border-color:rgba(255,170,0,0.3)"
-        onclick="setPreset(2)">Octave</button>
-      <button id="preset-btn-3" class="preset-btn" style="color:#ff6688;border-color:rgba(255,102,136,0.3)"
-        onclick="setPreset(3)">Cluster</button>
-      <button id="preset-btn-4" class="preset-btn" style="color:#88ffaa;border-color:rgba(136,255,170,0.3)"
-        onclick="setPreset(4)">Gospel</button>
-    </div>
-
-    <!-- Sing button -->
-    <button id="sing-btn" onmousedown="openMic()" onmouseup="closeMic()" ontouchstart="openMic()"
-      ontouchend="closeMic()">
-      Hold to sing
-    </button>
-
-    <!-- Mute buttons -->
-    <div id="mute-bar">
-      <div class="mute-group">
-        <span class="mute-label" style="color:rgba(255,220,200,0.4)">Soprano</span>
-        <span
-          style="font-size:0.58rem;color:rgba(255,220,200,0.35);letter-spacing:0.06em;font-family:'Courier New',monospace">you
-          (live)</span>
-      </div>
-      <div class="mute-group">
-        <span class="mute-label" style="color:rgba(200,240,255,0.5)">Alto</span>
-        <button id="mute-btn-1" class="mute-btn" onclick="toggleMute(1)">Mute</button>
-      </div>
-      <div class="mute-group">
-        <span class="mute-label" style="color:rgba(180,255,210,0.5)">Tenor</span>
-        <button id="mute-btn-2" class="mute-btn" onclick="toggleMute(2)">Mute</button>
-      </div>
-      <div class="mute-group">
-        <span class="mute-label" style="color:rgba(220,190,255,0.5)">Bass</span>
-        <button id="mute-btn-3" class="mute-btn" onclick="toggleMute(3)">Mute</button>
-      </div>
-    </div>
+  <!-- Preset pills -->
+  <div id="preset-bar">
+    <button id="preset-btn-auto" class="preset-btn" onclick="enableAutoMode()">auto</button>
+    <button id="preset-btn-0" class="preset-btn" onclick="setPreset(0)">major</button>
+    <button id="preset-btn-1" class="preset-btn" onclick="setPreset(1)">minor</button>
+    <button id="preset-btn-2" class="preset-btn" onclick="setPreset(2)">octave</button>
+    <button id="preset-btn-3" class="preset-btn" onclick="setPreset(3)">cluster</button>
+    <button id="preset-btn-4" class="preset-btn" onclick="setPreset(4)">gospel</button>
   </div>
 
   <!-- Start overlay -->
   <div id="overlay">
     <div class="overlay-inner">
       <h1>Digital Choir</h1>
-      <p class="sub">Realtime harmony simulator</p>
-
-      <div class="preset-legend">
-        <span class="legend-pill" style="color:#00ffcc;border-color:#00ffcc">Major — bright</span>
-        <span class="legend-pill" style="color:#aa88ff;border-color:#aa88ff">Minor — dark</span>
-        <span class="legend-pill" style="color:#ffaa00;border-color:#ffaa00">Octave — full</span>
-        <span class="legend-pill" style="color:#ff6688;border-color:#ff6688">Cluster — tense</span>
-        <span class="legend-pill" style="color:#88ffaa;border-color:#88ffaa">Gospel — soulful</span>
-      </div>
-
-      <div class="instructions">
-        <div class="instruction-row">
-          <div class="instruction-num">1</div>
-          <div class="instruction-text">Allow microphone access when prompted</div>
+      <p class="sub">Realtime harmony · gesture control</p>
+      <div class="steps">
+        <div class="step">
+          <div class="step-n">1</div>
+          <div class="step-t">Allow camera and microphone access</div>
         </div>
-        <div class="instruction-row">
-          <div class="instruction-num">2</div>
-          <div class="instruction-text">Choose a harmony preset — switch anytime while singing</div>
+        <div class="step">
+          <div class="step-n">2</div>
+          <div class="step-t">Sing — the harmony voices join automatically</div>
         </div>
-        <div class="instruction-row">
-          <div class="instruction-num">3</div>
-          <div class="instruction-text">Hold <strong>Space</strong> (or the button) while you sing — you hear yourself
-            naturally, the three harmony voices play through speakers</div>
+        <div class="step">
+          <div class="step-n">3</div>
+          <div class="step-t">Pinch open to bring harmony in · pinch closed to fade out</div>
         </div>
-        <div class="instruction-row">
-          <div class="instruction-num">4</div>
-          <div class="instruction-text">Keys 1–5 switch presets · Click a blob to mute/unmute that voice</div>
+        <div class="step">
+          <div class="step-n">4</div>
+          <div class="step-t">Press 0–5 or tap the pills below to change harmony type</div>
         </div>
       </div>
-
-      <button class="start-btn" onclick="startExperience()">Start singing</button>
+      <button class="start-btn" onclick="startExperience()">Start</button>
     </div>
   </div>
 
   <script src="sketch.js"></script>
   <script>
     async function startExperience() {
+      // Start camera for the video background
+      try {
+        const camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+        document.getElementById('cam').srcObject = camStream;
+      } catch (e) { console.warn('Camera not available:', e); }
       document.getElementById('overlay').style.display = 'none';
       if (typeof startApp === 'function') await startApp();
     }
