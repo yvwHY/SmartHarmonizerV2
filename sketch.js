@@ -125,6 +125,9 @@ let lastValidFreq = 0;
 let pitchShifters = [];
 let voiceGains = [];
 let roomReverb;
+let sharedTremolo;          // Tone.Tremolo — shared by all voices
+let tremoloDepth = 0;      // 0=off, 1=full — controlled by hand tilt
+let handTiltX = 0;      // smoothed hand tilt (-1=left, +1=right)
 
 // Hand tracking — pinch controls harmony volume
 let handpose, predictions = [];
@@ -306,7 +309,17 @@ async function startApp() {
     const sopranoDry = new Tone.Gain(0.85).connect(roomReverb);
     micGate.connect(sopranoDry);
 
-    // Three harmony voices — intervals come from the active preset
+    // Shared Tremolo — sits between voiceGains and reverb
+    // Rate 6Hz matches the reference video's 8.33Hz feel
+    // Starts with depth 0 — hand tilt controls how much tremolo applies
+    sharedTremolo = new Tone.Tremolo({
+      frequency: 6,
+      depth: 0,    // starts off — tilt hand to bring in
+      spread: 180,  // stereo spread between L/R
+      wet: 1.0,
+    }).connect(roomReverb).start();
+
+    // Three harmony voices: micGate → PitchShift → VoiceGain → Tremolo → Reverb
     const preset = PRESETS[currentPreset];
     for (let i = 0; i < 3; i++) {
       const ps = new Tone.PitchShift({
@@ -317,11 +330,10 @@ async function startApp() {
       });
       ps.wet.value = 1.0;
 
-      // Default 0.8 — pinch overrides when hand is detected
       const vg = new Tone.Gain(voiceMuted[i + 1] ? 0 : 0.8);
       micGate.connect(ps);
       ps.connect(vg);
-      vg.connect(roomReverb);
+      vg.connect(sharedTremolo);   // → tremolo → reverb → master
 
       pitchShifters.push(ps);
       voiceGains.push(vg);
@@ -441,6 +453,24 @@ function updateVisualNotes() {
 // Draw
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
+// Hand X position — wrist landmark mapped to screen width
+// Hand on RIGHT side = tremolo 0%
+// Hand moves LEFT    = tremolo increases to 100%
+// Returns 0.0 (right) to 1.0 (left), or -1 if no hand
+// ---------------------------------------------------------------------------
+function getHandX() {
+  if (!predictions || predictions.length === 0) return -1;
+  const lm = predictions[0].landmarks;
+  const wrist = lm[0];
+  // Landmark x is in camera space (0=left, 640=right).
+  // Because camera is mirrored, landmark 0 on left = user's right hand side.
+  // So: landmark x near 640 = hand on left of screen (user's right) = tremolo 0
+  //     landmark x near 0   = hand on right of screen (user's left) = tremolo 100
+  // Map landmark x 640→0 to tremolo 0→1
+  return constrain(map(wrist[0], 480, 100, 0, 1), 0, 1);
+}
+
+// ---------------------------------------------------------------------------
 // Pinch volume control
 // ---------------------------------------------------------------------------
 function updatePinchVolume() {
@@ -462,6 +492,16 @@ function updatePinchVolume() {
       vg.gain.rampTo(gainTarget, 0.03);
     }
   });
+
+  // Hand X position → tremolo depth
+  // Hand on right side of screen = 0% tremolo
+  // Hand moves to left side      = 100% tremolo
+  const handX = getHandX();
+  if (handX >= 0) {
+    handTiltX = lerp(handTiltX, handX, 0.10);
+    tremoloDepth = lerp(tremoloDepth, handTiltX, 0.08);
+    if (sharedTremolo) sharedTremolo.depth.rampTo(tremoloDepth, 0.1);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -618,7 +658,7 @@ function drawHandKeypoints() {
     ellipse(x, y, isKey ? 10 : 5);
   }
 
-  // Draw pinch line between thumb and index
+  // Pinch line: thumb tip → index tip, colour shows volume
   const tx = map(lm[4][0], 0, 640, width, 0);
   const ty = map(lm[4][1], 0, 480, 0, height);
   const ix = map(lm[8][0], 0, 640, width, 0);
@@ -627,6 +667,30 @@ function drawHandKeypoints() {
   stroke(lerp(255, 100, openness), lerp(100, 255, openness), 150, 140);
   strokeWeight(1.5);
   line(tx, ty, ix, iy);
+
+  // Tremolo bar — appears above the wrist, shows current tremolo depth
+  const wx = map(lm[0][0], 0, 640, width, 0);
+  const wy = map(lm[0][1], 0, 480, 0, height);
+  const td = tremoloDepth;
+  if (td > 0.02) {
+    const barW = 60;
+    const barH = 4;
+    const bx = wx - barW / 2;
+    const by = wy - 28;
+    // Background
+    noStroke();
+    fill(255, 255, 255, 25);
+    rect(bx, by, barW, barH, 2);
+    // Fill — blue when low, orange when high
+    fill(lerp(100, 255, td), lerp(180, 120, td), lerp(255, 60, td), 200);
+    rect(bx, by, barW * td, barH, 2);
+    // Label
+    fill(255, 255, 255, 120);
+    textSize(9);
+    textFont('monospace');
+    textAlign(CENTER, BOTTOM);
+    text('tremolo', wx, by - 2);
+  }
   noStroke();
 }
 
