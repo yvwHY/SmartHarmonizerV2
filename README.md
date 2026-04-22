@@ -1,14 +1,14 @@
-# Digital Choir V3
+# Smart HarmonizerV2 
 
 **Date:** April 2026
 
 **Author:** Yu Ting Liao
 
-**Project Type:** WCC1 Final Project — Technical Proof of Concept
+**Project Type:** WCC2 Final Project — Technical Proof of Concept
 
 ## Short Description
 
-Digital Choir V3 is a web-based real-time vocal harmony simulator. The user sings into a microphone and the system generates up to three harmony voices automatically, building a full chord around the input pitch. Hand gestures — tracked via webcam — control the harmony volume (pinch) and tremolo depth (horizontal hand position), turning the body into a live instrument controller.
+Smart HarmonizerV2 is a web-based real-time vocal harmony simulator. The user sings into a microphone and the system generates up to three harmony voices automatically, building a full chord around the input pitch. Hand gestures — tracked via webcam — control the harmony volume (pinch) and tremolo depth (horizontal hand position), turning the body into a live instrument controller.
 
 ## Concept / Intent
 
@@ -105,7 +105,7 @@ The system routes harmony voices to speakers but not the dry input voice (the us
 ## Credits / Acknowledgements
 
 - **Student:** Yu Ting Liao
-- **Course:** Workshops in Creative Coding 1, Goldsmiths University of London
+- **Course:** Workshops in Creative Coding 2, Goldsmiths University of London
 - **References:**
   - Dourish, P. (2001). *Where the Action Is: The Foundations of Embodied Interaction.* MIT Press.
   - Heap, I. (2014). Mi.Mu Gloves. http://mimugloves.com
