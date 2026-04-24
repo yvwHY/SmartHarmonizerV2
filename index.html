@@ -5,190 +5,28 @@
   <meta charset="UTF-8" />
   <title>Smart HarmonizerV2</title>
   <link rel="icon" href="data:,">
+
+  <!--
+    Smart Harmonizer V2 — Yu-Ting Liao
+    WCC2 Final Project, Goldsmiths University of London, April 2026
+
+    External libraries:
+      Tone.js  v14.8.49 — Web Audio effects chain (PitchShift, Reverb, Tremolo, Limiter)
+      p5.js    v1.9.0   — Canvas rendering and draw loop
+      ml5.js   v0.12.2  — Handpose landmark detection
+  -->
+  <link rel="stylesheet" href="style.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
   <script src="https://unpkg.com/ml5@0.12.2/dist/ml5.min.js"></script>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      background: #000;
-      overflow: hidden;
-      font-family: 'Courier New', monospace;
-      color: #fff;
-    }
-
-    /* Live camera feed — full screen behind canvas */
-    #cam {
-      position: fixed;
-      inset: 0;
-      width: 100vw;
-      height: 100vh;
-      object-fit: cover;
-      transform: scaleX(-1);
-      /* mirror */
-      opacity: 0.82;
-    }
-
-    /* p5 canvas sits on top, transparent background */
-    canvas {
-      position: fixed;
-      inset: 0;
-    }
-
-    /* Minimal status — top left, very subtle */
-    #hud {
-      position: fixed;
-      top: 18px;
-      left: 20px;
-      z-index: 200;
-      pointer-events: none;
-    }
-
-    .hud-row {
-      font-size: 0.62rem;
-      letter-spacing: 0.18em;
-      text-transform: uppercase;
-      color: rgba(255, 255, 255, 0.35);
-      margin-bottom: 3px;
-      text-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
-    }
-
-    .hud-val {
-      color: rgba(255, 255, 255, 0.75);
-      margin-left: 4px;
-    }
-
-    /* Preset bar — bottom centre, floating */
-    #preset-bar {
-      position: fixed;
-      bottom: 24px;
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      gap: 8px;
-      z-index: 200;
-    }
-
-    .preset-btn {
-      padding: 5px 14px;
-      font-family: 'Courier New', monospace;
-      font-size: 0.62rem;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      background: rgba(0, 0, 0, 0.45);
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      border-radius: 20px;
-      cursor: pointer;
-      color: rgba(255, 255, 255, 0.55);
-      transition: all 0.2s;
-      backdrop-filter: blur(6px);
-    }
-
-    .preset-btn:hover {
-      border-color: rgba(255, 255, 255, 0.5);
-      color: #fff;
-    }
-
-    /* Overlay */
-    #overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.92);
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      z-index: 1000;
-    }
-
-    .overlay-inner {
-      text-align: center;
-      max-width: 420px;
-      padding: 40px;
-    }
-
-    .overlay-inner h1 {
-      font-size: clamp(1.6rem, 3.5vw, 2.4rem);
-      font-weight: 400;
-      letter-spacing: 0.3em;
-      text-transform: uppercase;
-      margin-bottom: 8px;
-    }
-
-    .sub {
-      font-size: 0.68rem;
-      letter-spacing: 0.15em;
-      color: rgba(255, 255, 255, 0.3);
-      text-transform: uppercase;
-      margin-bottom: 32px;
-    }
-
-    .steps {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      text-align: left;
-      margin-bottom: 32px;
-    }
-
-    .step {
-      display: flex;
-      gap: 12px;
-      align-items: flex-start;
-    }
-
-    .step-n {
-      width: 18px;
-      height: 18px;
-      border: 1px solid rgba(255, 255, 255, 0.25);
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 0.55rem;
-      color: rgba(255, 255, 255, 0.4);
-      flex-shrink: 0;
-      margin-top: 2px;
-    }
-
-    .step-t {
-      font-size: 0.7rem;
-      color: rgba(255, 255, 255, 0.4);
-      line-height: 1.5;
-      letter-spacing: 0.03em;
-    }
-
-    .start-btn {
-      padding: 12px 44px;
-      font-family: 'Courier New', monospace;
-      font-size: 0.75rem;
-      letter-spacing: 0.2em;
-      text-transform: uppercase;
-      background: transparent;
-      color: rgba(255, 255, 255, 0.8);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      border-radius: 2px;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-
-    .start-btn:hover {
-      background: #fff;
-      color: #000;
-    }
-  </style>
 </head>
 
 <body>
 
-  <!-- Camera feed behind everything -->
+  <!-- Camera feed sits behind the p5 canvas -->
   <video id="cam" autoplay playsinline muted></video>
 
-  <!-- HUD -->
+  <!-- HUD: live note name, harmony mode, and audio status -->
   <div id="hud">
     <div class="hud-row">note <span id="note-display" class="hud-val">--</span></div>
     <div class="hud-row">harmony <span id="harmony-mode" class="hud-val">--</span></div>
@@ -196,7 +34,7 @@
         style="color:rgba(255,255,255,0.25);font-size:0.58rem;letter-spacing:0.12em"></span></div>
   </div>
 
-  <!-- Preset pills -->
+  <!-- Harmony preset selector — keys 0–5 also work (see keyTyped in sketch.js) -->
   <div id="preset-bar">
     <button id="preset-btn-auto" class="preset-btn" onclick="enableAutoMode()">auto</button>
     <button id="preset-btn-0" class="preset-btn" onclick="setPreset(0)">major</button>
@@ -206,7 +44,7 @@
     <button id="preset-btn-4" class="preset-btn" onclick="setPreset(4)">gospel</button>
   </div>
 
-  <!-- Start overlay -->
+  <!-- Start overlay — requires user gesture to unlock Web Audio API -->
   <div id="overlay">
     <div class="overlay-inner">
       <h1>Smart Harmonizer V2</h1>
@@ -218,7 +56,7 @@
         </div>
         <div class="step">
           <div class="step-n">2</div>
-          <div class="step-t">Sing — the harmony voices join automatically</div>
+          <div class="step-t">Sing — Alto, Tenor and Bass join automatically</div>
         </div>
         <div class="step">
           <div class="step-n">3</div>
@@ -226,7 +64,11 @@
         </div>
         <div class="step">
           <div class="step-n">4</div>
-          <div class="step-t">Press 0–5 or tap the pills below to change harmony type</div>
+          <div class="step-t">Move hand left to add tremolo · right to remove it</div>
+        </div>
+        <div class="step">
+          <div class="step-n">5</div>
+          <div class="step-t">Keys 0–5 or the pills below switch harmony type</div>
         </div>
       </div>
       <button class="start-btn" onclick="startExperience()">Start</button>
@@ -235,12 +77,23 @@
 
   <script src="sketch.js"></script>
   <script>
+    /**
+     * startExperience — triggered by the Start button.
+     * 1. Requests camera permission and attaches stream to the background <video>.
+     * 2. Hides the overlay.
+     * 3. Calls startApp() in sketch.js to initialise the audio chain.
+     *    Must be called from a user gesture to satisfy Web Audio autoplay policy.
+     */
     async function startExperience() {
-      // Start camera for the video background
       try {
-        const camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+        const camStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user' },
+          audio: false,
+        });
         document.getElementById('cam').srcObject = camStream;
-      } catch (e) { console.warn('Camera not available:', e); }
+      } catch (e) {
+        console.warn('[Harmonizer] Camera unavailable — continuing without video background:', e);
+      }
       document.getElementById('overlay').style.display = 'none';
       if (typeof startApp === 'function') await startApp();
     }

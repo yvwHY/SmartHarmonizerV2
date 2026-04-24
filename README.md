@@ -1,9 +1,7 @@
-# Smart HarmonizerV2 
+# Smart HarmonizerV2
 
-**Date:** April 2026
-
-**Author:** Yu Ting Liao
-
+**Date:** April 2026  
+**Author:** Yu Ting Liao  
 **Project Type:** WCC2 Final Project — Technical Proof of Concept
 
 ## Short Description
@@ -48,33 +46,33 @@ Microphone
 
 Five selectable chord types, each defined as fixed semitone intervals above the input pitch:
 
-| Preset  | Intervals        | Character          |
-|---------|------------------|--------------------|
-| Major   | +4, +7, −5       | Bright, uplifting  |
-| Minor   | +3, +7, −5       | Dark, emotional    |
-| Octave  | +12, −12, +7     | Full, powerful     |
-| Cluster | +2, +5, +9       | Modern, tense      |
-| Gospel  | +4, +7, +11      | Soulful, lush      |
+| Preset  | Intervals    | Character                   |
+|---------|--------------|-----------------------------|
+| Major   | +4, +7, −5   | Bright, uplifting           |
+| Minor   | +3, +7, −5   | Dark, emotional             |
+| Octave  | +12, −12, +7 | Full, powerful              |
+| Cluster | +2, +5, +9   | Modern, tense               |
+| Gospel  | +4, +7, +11  | Soulful, lush               |
 
 **Auto mode** detects whether the singing context is major or minor from a rolling pitch-class histogram and selects the best preset automatically.
 
 ## Gesture Controls
 
-| Gesture | Action |
-|---------|--------|
-| Pinch open | Harmony volume swells in |
-| Pinch closed | Harmony fades to silence |
-| Hand on right side of screen | Tremolo off (0%) |
-| Hand moves left | Tremolo increases toward 100% |
-| Keys 1–5 | Select harmony preset manually |
-| Key 0 | Return to Auto mode |
+| Gesture                       | Action                          |
+|-------------------------------|---------------------------------|
+| Pinch open                    | Harmony volume swells in        |
+| Pinch closed                  | Harmony fades to silence        |
+| Hand on right side of screen  | Tremolo off (0%)                |
+| Hand moves left               | Tremolo increases toward 100%   |
+| Keys 1–5                      | Select harmony preset manually  |
+| Key 0                         | Return to Auto mode             |
 
 ## How to Run
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/yvwHY/Smart-Vocal-Harmonizer.git
-   cd Smart-Vocal-Harmonizer
+   git clone https://github.com/yvwHY/SmartHarmonizerV2.git
+   cd SmartHarmonizerV2
    ```
 
 2. **Start a local server** (required for camera/microphone CORS):
@@ -94,13 +92,32 @@ Five selectable chord types, each defined as fixed semitone intervals above the 
 - Local web server
 
 **Hardware:**
-- Webcam (for hand gesture tracking)
-- Microphone (external mic recommended for cleaner pitch detection)
-- Headphones (strongly recommended — using built-in speakers causes audio feedback through the microphone)
+
+> ⚠️ **Headphones or an external microphone are strongly recommended.**
+>
+> The built-in laptop microphone sits physically 2–3 cm from the built-in speakers. When the harmony voices play through the speakers, the microphone picks them up and the system begins harmonising with itself — a feedback loop that degrades both the audio output and the pitch detection.
+>
+> The system already applies several software mitigations:
+> - `echoCancellation: true` on the mic stream (Chrome's built-in AEC)
+> - The user's dry voice is never routed through speakers (they hear themselves naturally)
+> - All harmony voices share a reverb send rather than a direct output
+>
+> These help significantly, but cannot fully compensate for the physical proximity of mic and speaker on a laptop. **The definitive fix is hardware:**
+>
+> - **Option A — Headphones (easiest):** Any wired or wireless headphones. Sound goes into your ears only, never reaches the mic. Instant fix.
+> - **Option B — External USB/audio interface mic:** A cardioid microphone on a stand, pointed away from the speakers, physically separated from the audio output.
+> - **Option C — AirPods or earbuds:** The mic is close to your mouth and far from the laptop speakers. Much better isolation than the built-in mic.
 
 ## Notes on Feedback
 
-The system routes harmony voices to speakers but not the dry input voice (the user hears themselves naturally). This avoids the main feedback path. However, if using built-in laptop speakers without headphones, the microphone will pick up speaker output and degrade pitch detection. Headphones eliminate this entirely.
+For reference, this is what causes feedback and what each mitigation does:
+
+| Cause | Mitigation | Effectiveness |
+|-------|-----------|---------------|
+| Harmony plays through speakers → enters mic | `echoCancellation: true` | Partial — AEC works best when speaker and mic are far apart |
+| Dry voice plays through speakers → enters mic | Soprano not routed to speakers | Good — removes the loudest feedback path |
+| Room reverb of harmony voices enters mic | All voices through shared reverb (not direct) | Minor improvement |
+| Physical proximity of laptop mic to speaker | **Use headphones or external mic** | Complete fix |
 
 ## Credits / Acknowledgements
 
@@ -113,6 +130,7 @@ The system routes harmony voices to speakers but not the dry input voice (the us
   - McCarthy, L. et al. (2015). p5.js Reference. https://p5js.org/reference/
   - Mann, Y. (2019). Tone.js. https://tonejs.github.io
   - Shiffman, D. "ml5.js: Handpose". The Coding Train. https://thecodingtrain.com
+  - RVC-Project. (2023). Retrieval-based-Voice-Conversion-WebUI. https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI
 
 ## License
 
@@ -120,5 +138,5 @@ Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)
 
 ## Contact
 
-- **GitHub:** https://github.com/yvwHY/SmartHarmonizerV2.git
+- **GitHub:** https://github.com/yvwHY/SmartHarmonizerV2
 - **Email:** yvw.liao@gmail.com
