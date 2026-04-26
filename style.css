@@ -175,3 +175,22 @@ canvas {
   background: #fff;
   color: #000;
 }
+
+
+/* ── Accessibility mode toggle — top right ──────────────────────────── */
+#mode-toggle {
+  position: fixed;
+  top: 18px;
+  right: 20px;
+  z-index: 200;
+}
+
+#mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#mode-icon {
+  font-size: 0.9rem;
+}

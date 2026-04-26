@@ -23,8 +23,16 @@
 
 <body>
 
-  <!-- Camera feed sits behind the p5 canvas -->
+  <!-- Camera feed — furthest back -->
   <video id="cam" autoplay playsinline muted></video>
+
+
+  <!-- Accessibility mode toggle — switch between voice-only and voice+gesture -->
+  <div id="mode-toggle">
+    <button id="mode-btn" class="preset-btn" onclick="toggleGestureMode()">
+      <span id="mode-icon">✋</span> <span id="mode-label">gesture on</span>
+    </button>
+  </div>
 
   <!-- HUD: live note name, harmony mode, and audio status -->
   <div id="hud">

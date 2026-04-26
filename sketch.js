@@ -55,6 +55,32 @@ let currentPreset = 0;    // index into PRESETS array
 let autoMode = true; // true = auto-detect harmony; false = manual selection
 
 // ============================================================================
+// ACCESSIBILITY: GESTURE MODE TOGGLE
+// ============================================================================
+// gestureMode = false → voice-only mode (no hand needed). Harmony volume is
+// fixed at full, tremolo is off. Designed for users who can't or prefer not
+// to use hand gestures. Inspired by V1 feedback to consider users with
+// limited mobility or atypical movement patterns.
+let gestureMode = true;
+
+function toggleGestureMode() {
+  gestureMode = !gestureMode;
+  const icon = document.getElementById('mode-icon');
+  const label = document.getElementById('mode-label');
+  if (icon) icon.textContent = gestureMode ? '✋' : '🎤';
+  if (label) label.textContent = gestureMode ? 'gesture on' : 'voice only';
+
+  if (!gestureMode) {
+    // Voice-only mode: pin harmony to full volume, kill tremolo
+    harmonyVolume = 1.0;
+    voiceGains.forEach((vg, i) => {
+      if (!voiceMuted[i + 1]) vg.gain.rampTo(0.96, 0.2);
+    });
+    if (sharedTremolo) sharedTremolo.depth.rampTo(0, 0.3);
+  }
+}
+
+// ============================================================================
 // PITCH HISTORY & AUTO KEY DETECTION
 // A rolling histogram of which pitch classes (C, C#, D...) the user has sung.
 // Used to estimate whether the user is singing in a major or minor context.
@@ -306,11 +332,14 @@ function setup() {
   createCanvas(windowWidth, windowHeight);
   pixelDensity(1); // disable retina scaling for performance
 
-  // Create a small hidden video element for ml5 Handpose.
+
+  // Create a hidden video element for ml5 Handpose.
   // The visible camera feed is handled by the <video id="cam"> element in HTML.
   // Using a separate capture here avoids interfering with the background video.
+  // 640×480 (vs 320×240) gives noticeably better landmark accuracy at the cost
+  // of ~2× inference time — still runs at 60fps on modern hardware.
   const handVideo = createCapture(VIDEO);
-  handVideo.size(320, 240); // small size = faster inference
+  handVideo.size(640, 480);
   handVideo.hide();
 
   // ml5.js Handpose — tracks 21 landmarks per hand
@@ -495,6 +524,7 @@ function getHandX() {
  * If no hand is detected, the current volume is held (no change).
  */
 function updatePinchVolume() {
+  if (!gestureMode) return; // voice-only mode: skip all gesture-driven updates
   const openness = getPinchOpenness();
   if (openness < 0) return; // no hand detected — hold current volume
 
@@ -655,6 +685,7 @@ function draw() {
     updatePitch();
     updateVisualNotes();
     updatePinchVolume();
+
   }
 
   drawOrbs();
@@ -773,6 +804,7 @@ function drawOrbs() {
  * A wrist-mounted bar shows current tremolo depth.
  */
 function drawHandKeypoints() {
+  if (!gestureMode) return; // voice-only mode hides hand overlay
   if (!predictions || predictions.length === 0) return;
   const lm = predictions[0].landmarks;
 
@@ -785,13 +817,13 @@ function drawHandKeypoints() {
     ellipse(x, y, isKey ? 10 : 5);
   }
 
-  // Pinch line: colour lerps orange→green as hand opens
+  // Pinch line: orange (closed) → teal (open)
   const tx = map(lm[4][0], 0, 640, width, 0);
   const ty = map(lm[4][1], 0, 480, 0, height);
   const ix = map(lm[8][0], 0, 640, width, 0);
   const iy = map(lm[8][1], 0, 480, 0, height);
   const openness = getPinchOpenness();
-  stroke(lerp(255, 100, openness), lerp(100, 255, openness), 150, 140);
+  stroke(lerp(200, 20, openness), lerp(80, 140, openness), lerp(20, 120, openness), 180);
   strokeWeight(1.5);
   line(tx, ty, ix, iy);
 
@@ -848,6 +880,7 @@ function updateUI() {
   if (hm) hm.innerHTML = autoMode
     ? 'auto → ' + PRESETS[currentPreset].name
     : PRESETS[currentPreset].name;
+
 }
 
 function windowResized() { resizeCanvas(windowWidth, windowHeight); }
